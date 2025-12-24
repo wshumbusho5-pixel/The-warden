@@ -1,0 +1,69 @@
+# Client Configuration
+
+# Display Settings
+display:
+  # Default display mode (if no modifier is detected)
+  # Options: 'client', 'server', 'both', 'silent'
+  default_mode: 'client'
+
+  # Show notifications when using server/silent mode
+  show_mode_notifications: true
+
+# Keyboard Settings
+keyboard:
+  # Global hotkey to activate AI
+  hotkey: 'f1'
+
+  # Alternative: 'ctrl+shift+p', 'alt+space', etc.
+  # hotkey: 'ctrl+shift+a'
+
+# Screen Capture Settings
+screen_capture:
+  # Enable screen capture and OCR
+  enabled: true
+
+  # Maximum characters to send from screen (to reduce API costs)
+  max_characters: 2000
+
+# Clipboard Settings
+clipboard:
+  # Enable clipboard context
+  enabled: true
+
+  # Maximum clipboard characters to send
+  max_characters: 500
+
+# Server Connection
+server:
+  # Server IP (override with MAIN_COMPUTER_IP env variable)
+  # ip: 'localhost'
+
+  # Server port
+  port: 8765
+
+  # Connection timeout (seconds)
+  timeout: 10
+
+# Privacy Settings
+privacy:
+  # Exclude these applications from screen capture
+  excluded_apps:
+    - 'Password Manager'
+    - '1Password'
+    - 'Bitwarden'
+    - 'KeePass'
+
+  # Patterns to exclude from screen text (regex)
+  excluded_patterns:
+    - 'password'
+    - 'secret'
+    - 'api[_-]?key'
+    - 'token'
+
+# Advanced Settings
+advanced:
+  # Enable debug logging
+  debug: false
+
+  # Log file location
+  log_file: 'logs/client.log'
