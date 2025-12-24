@@ -1,0 +1,22 @@
+# Core dependencies
+websockets>=12.0
+anthropic>=0.39.0
+openai>=1.54.0
+requests>=2.31.0
+
+# Client-side dependencies
+keyboard>=0.13.5
+pyautogui>=0.9.54
+pytesseract>=0.3.10
+Pillow>=10.0.0
+pyperclip>=1.8.2
+
+# Utilities
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Optional - for future enhancements
+# redis>=5.0.0
+
+# Note: Ollama doesn't need a Python package - it runs as a local service
+# Install from: https://ollama.ai
