@@ -1,0 +1,38 @@
+# Server Configuration
+server:
+  host: "0.0.0.0"
+  port: 8765
+
+# AI Provider Configuration
+# Options: 'auto', 'claude', 'openai', 'ollama'
+ai:
+  provider: 'auto'  # Auto-detect available provider
+
+  # Claude (Anthropic) Settings
+  claude:
+    model: "claude-sonnet-4-20250514"
+    # API key from .env: ANTHROPIC_API_KEY
+
+  # OpenAI (ChatGPT) Settings
+  openai:
+    model: "gpt-4"
+    # API key from .env: OPENAI_API_KEY
+
+  # Ollama (Local - FREE!) Settings
+  ollama:
+    model: "llama3.2"  # Options: llama3.2, mistral, codellama, etc.
+    host: "http://localhost:11434"
+
+  # General AI Settings
+  max_tokens: 2000
+  temperature: 0.7
+
+# Security
+security:
+  require_auth: true
+  shared_secret: "change-this-to-a-secure-secret"
+
+# Logging
+logging:
+  level: "INFO"
+  file: "logs/server.log"
