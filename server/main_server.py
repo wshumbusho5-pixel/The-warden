@@ -102,7 +102,7 @@ class InvisibleAIServer:
 
         return question.strip(), display_mode
 
-    async def handle_client(self, websocket, path):
+    async def handle_client(self, websocket):
         """Handle incoming client connections"""
         # Register client
         self.connected_clients.add(websocket)
