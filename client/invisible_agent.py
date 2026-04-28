@@ -11,12 +11,23 @@ import pyperclip
 from datetime import datetime
 import os
 import sys
+import yaml
 from dotenv import load_dotenv
 
 # Import our modules
 from screen_capture import ScreenCapture
 from keyboard_listener import KeyboardListener
 from overlay_display import ResponseOverlay
+
+
+def _load_hotkey(default='f1'):
+    config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
+    try:
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+        return cfg.get('keyboard', {}).get('hotkey', default)
+    except Exception:
+        return default
 
 # Load environment variables
 load_dotenv()
@@ -38,9 +49,10 @@ class InvisibleAgentPro:
 
         # Initialize components
         self.screen_capture = ScreenCapture()
+        self.hotkey = _load_hotkey()
         self.keyboard_listener = KeyboardListener(
             callback=self.on_hotkey_activated,
-            hotkey='f1'
+            hotkey=self.hotkey
         )
         self.overlay = ResponseOverlay()
 
@@ -172,33 +184,45 @@ class InvisibleAgentPro:
             content = response.get('content', 'No response')
             metadata = response.get('metadata')
 
-        # Show in overlay
-        self.overlay.show(content, metadata)
+        # Marshal Tk calls onto the main thread (macOS requires NSWindow on main thread)
+        if self.overlay.window is not None:
+            self.overlay.window.after(0, lambda: self.overlay.show(content, metadata))
+        else:
+            self.overlay.show(content, metadata)
 
     def on_hotkey_activated(self):
         """Called when user presses the hotkey"""
         print(f"\n{'='*60}")
         print(f"  🔥 AI ASSISTANT ACTIVATED")
         print(f"{'='*60}\n")
+        self._run_request("Help me with what's on my screen", use_screen=True)
 
-        # Run async request in event loop
+    def on_user_question(self, question):
+        """Called when the user types a question into the overlay input."""
+        print(f"[{self._timestamp()}] User question: {question}")
+        # Run on a worker thread so Tk mainloop stays responsive
+        import threading
+        threading.Thread(
+            target=self._run_request,
+            args=(question, True),
+            daemon=True,
+        ).start()
+
+    def _run_request(self, question, use_screen):
         try:
-            # Create new event loop for this thread
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-
-            # Send request (with screen capture)
             response = loop.run_until_complete(
-                self.send_request(question="Help me with what's on my screen", use_screen=True)
+                self.send_request(question=question, use_screen=use_screen)
             )
-
-            # Display response
             self.display_response(response)
-
         except Exception as e:
-            print(f"[{self._timestamp()}] Error handling hotkey: {e}")
+            print(f"[{self._timestamp()}] Error handling request: {e}")
         finally:
-            loop.close()
+            try:
+                loop.close()
+            except Exception:
+                pass
 
     def start_background_mode(self):
         """
@@ -208,22 +232,37 @@ class InvisibleAgentPro:
         print(f"  Invisible AI Assistant - Background Mode")
         print(f"{'='*60}")
         print(f"  Server: {self.server_url}")
-        print(f"  Hotkey: F1")
+        print(f"  Hotkey: {self.hotkey}")
         print(f"  Status: Running invisibly...")
         print(f"{'='*60}\n")
-        print(f"[{self._timestamp()}] Press F1 to activate AI")
+        print(f"[{self._timestamp()}] Press {self.hotkey} to activate AI")
         print(f"[{self._timestamp()}] Press Ctrl+C to stop\n")
 
         self.running = True
 
-        # Start keyboard listener
+        # Pre-create overlay window on the main thread (macOS NSWindow requirement)
+        self.overlay.create_window()
+        self.overlay.on_submit = self.on_user_question
+        # Show the overlay immediately so the user can type questions without
+        # needing to fire the hotkey first. Use show() so macOS window
+        # attributes (Spaces / level) are applied.
+        self.overlay.window.after(
+            0,
+            lambda: self.overlay.show(
+                "Ready. Type a question below or press the hotkey to ask about your screen.",
+                None,
+            ),
+        )
+
+        # Start keyboard listener (runs in its own thread)
         self.keyboard_listener.start()
 
-        # Wait for keyboard events
+        # Run Tk mainloop on the main thread so hotkey callbacks can schedule UI work
         try:
-            self.keyboard_listener.wait()
+            self.overlay.window.mainloop()
         except KeyboardInterrupt:
             print(f"\n[{self._timestamp()}] Stopping...")
+        finally:
             self.stop()
 
     def stop(self):

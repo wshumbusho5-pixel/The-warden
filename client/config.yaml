@@ -12,7 +12,7 @@ display:
 # Keyboard Settings
 keyboard:
   # Global hotkey to activate AI
-  hotkey: 'f1'
+  hotkey: 'ctrl+alt+a'
 
   # Alternative: 'ctrl+shift+p', 'alt+space', etc.
   # hotkey: 'ctrl+shift+a'

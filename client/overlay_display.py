@@ -7,13 +7,111 @@ from tkinter import scrolledtext
 import threading
 
 
+def _set_accessory_activation_policy():
+    """Make the Python process a macOS 'accessory' app — no Dock icon,
+    behaves like a menu-bar utility. Accessory apps' windows can appear
+    over fullscreen apps and on every Space more reliably than regular apps."""
+    try:
+        from Cocoa import NSApp
+        NSApplicationActivationPolicyAccessory = 1
+        NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    except Exception as e:
+        print(f"[WARN] Could not set accessory activation policy: {e}")
+
+
+def _exclude_from_screen_capture(tk_window):
+    """Mark a Tk window's underlying NSWindow as excluded from macOS screen
+    recording / sharing (NSWindowSharingNone). Visible to the user, blank in
+    Zoom/Meet/Teams/QuickTime captures."""
+    try:
+        from Cocoa import NSApp
+    except ImportError:
+        print("[WARN] pyobjc-framework-Cocoa not available; overlay is visible to screen capture")
+        return False
+
+    # Force the NSWindow to be realized so NSApp.windows() sees it
+    tk_window.update_idletasks()
+    tk_window.update()
+
+    target_title = tk_window.title()
+    NSWindowSharingNone = 0
+    # Overlay is visible on every Space simultaneously, including fullscreen apps.
+    # Stationary keeps it pinned in place during Mission Control transitions.
+    NSWindowCollectionBehaviorCanJoinAllSpaces = 1 << 0
+    NSWindowCollectionBehaviorStationary = 1 << 4
+    NSWindowCollectionBehaviorFullScreenAuxiliary = 1 << 8
+    NSPopUpMenuWindowLevel = 101
+
+    behavior = (
+        NSWindowCollectionBehaviorCanJoinAllSpaces
+        | NSWindowCollectionBehaviorStationary
+        | NSWindowCollectionBehaviorFullScreenAuxiliary
+    )
+
+    found_titles = []
+    for ns_window in NSApp.windows():
+        try:
+            t = ns_window.title()
+            found_titles.append(repr(t))
+            if t == target_title:
+                ns_window.setSharingType_(NSWindowSharingNone)
+                ns_window.setCollectionBehavior_(behavior)
+                ns_window.setLevel_(NSPopUpMenuWindowLevel)
+                print(
+                    f"[INFO] Overlay '{target_title}' configured: "
+                    f"sharing=hidden, collection={behavior}, level={NSPopUpMenuWindowLevel}"
+                )
+                return ns_window
+        except Exception as e:
+            found_titles.append(f"<err:{e}>")
+            continue
+    print(f"[WARN] Could not locate NSWindow named {target_title!r}; saw: {found_titles}")
+    return None
+
+
+def _active_screen_top_right(window_w, window_h, margin=20, top_margin=60):
+    """Return (x, y) in Tk geometry coords for the top-right of whichever
+    screen the mouse cursor is on. Falls back to primary screen on failure."""
+    try:
+        from Cocoa import NSScreen, NSEvent
+    except ImportError:
+        return None
+    try:
+        mouse = NSEvent.mouseLocation()  # NSPoint, origin bottom-left of main display
+        main_height = NSScreen.mainScreen().frame().size.height
+        for screen in NSScreen.screens():
+            f = screen.frame()
+            if (f.origin.x <= mouse.x <= f.origin.x + f.size.width and
+                    f.origin.y <= mouse.y <= f.origin.y + f.size.height):
+                # Convert NSScreen (bottom-left, main-relative) -> Tk (top-left from main top)
+                tk_x = int(f.origin.x + f.size.width - window_w - margin)
+                tk_y = int(main_height - f.origin.y - f.size.height + top_margin)
+                return (tk_x, tk_y)
+    except Exception as e:
+        print(f"[WARN] Active-screen lookup failed: {e}")
+    return None
+
+
 class ResponseOverlay:
     """Creates a transparent overlay window to display AI responses"""
+
+    MINI_SIZE = (130, 44)
+    COMPACT_SIZE = (380, 320)
+    EXPANDED_SIZE = (720, 560)
 
     def __init__(self):
         self.window = None
         self.text_widget = None
-        self.is_visible = False
+        self.input_entry = None
+        self.expand_btn = None
+        self.minimize_btn = None
+        # Each entry: (frame, pack_kwargs_dict). Hidden when minimized.
+        self.body_frames = []
+        self.mini_frame = None
+        self.on_submit = None  # callback: fn(question_str) — set by agent
+        self.is_visible = True
+        self.is_expanded = False
+        self.is_minimized = False
 
     def create_window(self):
         """Create the overlay window"""
@@ -24,32 +122,23 @@ class ResponseOverlay:
         self.window = tk.Tk()
         self.window.title("AI Assistant")
 
-        # Window configuration
-        self.window.attributes('-topmost', True)  # Always on top
+        # Make the Python app an accessory (improves Spaces behavior) before
+        # the NSWindow is fully realized.
+        _set_accessory_activation_policy()
+
+        # Window configuration. We rely on NSWindow.setLevel_ for "always on
+        # top" rather than Tk's -topmost (which fights with our window level).
         self.window.attributes('-alpha', 0.95)     # Slightly transparent
+        self.window.resizable(True, True)
+        self.window.minsize(300, 220)
 
-        # On macOS, make it float above all windows
-        try:
-            self.window.attributes('-type', 'utility')  # macOS
-        except:
-            pass
-
-        # Window size and position
-        window_width = 500
-        window_height = 400
-
-        # Center on screen
-        screen_width = self.window.winfo_screenwidth()
-        screen_height = self.window.winfo_screenheight()
-        x = (screen_width - window_width) // 2
-        y = (screen_height - window_height) // 2
-
-        self.window.geometry(f"{window_width}x{window_height}+{x}+{y}")
+        # Initial size + position (compact, top-right of active screen)
+        self._reposition()
 
         # Style
         self.window.configure(bg='#1e1e1e')
 
-        # Title label
+        # Title bar with minimize + expand toggles
         title_frame = tk.Frame(self.window, bg='#2d2d2d', height=40)
         title_frame.pack(fill=tk.X, padx=0, pady=0)
 
@@ -61,11 +150,60 @@ class ResponseOverlay:
             font=('Arial', 12, 'bold'),
             pady=10
         )
-        title_label.pack()
+        title_label.pack(side=tk.LEFT, padx=12)
+
+        self.expand_btn = tk.Button(
+            title_frame,
+            text="⤢",
+            command=self.toggle_expand,
+            bg='#2d2d2d',
+            fg='#ffffff',
+            font=('Arial', 14, 'bold'),
+            relief=tk.FLAT,
+            bd=0,
+            padx=10,
+            cursor='hand2',
+            activebackground='#3d3d3d',
+            activeforeground='#ffffff',
+        )
+        self.expand_btn.pack(side=tk.RIGHT, padx=4)
+
+        self.minimize_btn = tk.Button(
+            title_frame,
+            text="—",
+            command=self.minimize,
+            bg='#2d2d2d',
+            fg='#ffffff',
+            font=('Arial', 14, 'bold'),
+            relief=tk.FLAT,
+            bd=0,
+            padx=10,
+            cursor='hand2',
+            activebackground='#3d3d3d',
+            activeforeground='#ffffff',
+        )
+        self.minimize_btn.pack(side=tk.RIGHT, padx=4)
+
+        # The minimized "pill" view: a single clickable label that lives in
+        # place of the rest of the UI when the user clicks minimize.
+        self.mini_frame = tk.Frame(self.window, bg='#1e1e1e')
+        mini_label = tk.Label(
+            self.mini_frame,
+            text="🤖  click to expand",
+            bg='#1e1e1e',
+            fg='#ffffff',
+            font=('Arial', 11),
+            cursor='hand2',
+        )
+        mini_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+        mini_label.bind('<Button-1>', lambda e: self.restore())
+        # mini_frame is NOT packed by default — only when minimized.
 
         # Text display area
         text_frame = tk.Frame(self.window, bg='#1e1e1e')
-        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text_pack = dict(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        text_frame.pack(**text_pack)
+        self.body_frames.append((text_frame, text_pack))
 
         self.text_widget = scrolledtext.ScrolledText(
             text_frame,
@@ -80,15 +218,48 @@ class ResponseOverlay:
         )
         self.text_widget.pack(fill=tk.BOTH, expand=True)
 
+        # Input row: ask a question directly
+        input_frame = tk.Frame(self.window, bg='#1e1e1e')
+        input_pack = dict(fill=tk.X, padx=10, pady=(0, 10))
+        input_frame.pack(**input_pack)
+        self.body_frames.append((input_frame, input_pack))
+
+        self.input_entry = tk.Entry(
+            input_frame,
+            bg='#2d2d2d',
+            fg='#ffffff',
+            insertbackground='white',
+            font=('Arial', 11),
+            relief=tk.FLAT,
+        )
+        self.input_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, padx=(0, 5))
+        self.input_entry.bind('<Return>', lambda e: self._submit_question())
+
+        send_btn = tk.Button(
+            input_frame,
+            text="Send",
+            command=self._submit_question,
+            bg='#0a84ff',
+            fg='#ffffff',
+            font=('Arial', 10, 'bold'),
+            relief=tk.FLAT,
+            padx=18,
+            pady=6,
+            cursor='hand2',
+        )
+        send_btn.pack(side=tk.RIGHT)
+
         # Button frame
         button_frame = tk.Frame(self.window, bg='#1e1e1e')
-        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        button_pack = dict(fill=tk.X, padx=10, pady=10)
+        button_frame.pack(**button_pack)
+        self.body_frames.append((button_frame, button_pack))
 
-        # Close button
+        # Minimize-from-button-row (matches the "—" in the title bar)
         close_btn = tk.Button(
             button_frame,
-            text="Close (ESC)",
-            command=self.hide,
+            text="Minimize (ESC)",
+            command=self.minimize,
             bg='#404040',
             fg='#ffffff',
             font=('Arial', 10),
@@ -115,48 +286,110 @@ class ResponseOverlay:
         copy_btn.pack(side=tk.RIGHT, padx=5)
 
         # Keyboard bindings
-        self.window.bind('<Escape>', lambda e: self.hide())
+        self.window.bind('<Escape>', lambda e: self.minimize())
         self.window.bind('<Control-c>', lambda e: self.copy_to_clipboard())
 
-        # Don't show window yet
-        self.window.withdraw()
+        # Closing the red X minimizes instead of killing the client
+        self.window.protocol("WM_DELETE_WINDOW", self.minimize)
+
+        # Apply screen-capture exclusion + Spaces / level attributes.
+        # The window is shown immediately (no withdraw) — staying always
+        # visible avoids the show/hide → wrong-Space problem.
+        _exclude_from_screen_capture(self.window)
+        # Re-apply attributes a few times after Tk finishes laying things
+        # out, in case Tk re-sets defaults during initial event dispatch.
+        for delay_ms in (200, 600, 1500):
+            self.window.after(delay_ms, lambda: _exclude_from_screen_capture(self.window))
 
     def show(self, content, metadata=None):
-        """
-        Show the overlay with content
-
-        Args:
-            content: Text to display
-            metadata: Optional metadata dict with model, tokens, etc.
-        """
-        # Create window if it doesn't exist
+        """Update overlay content. The window is always visible — this just
+        replaces text and ensures we're not in minimized state."""
         if self.window is None:
             self.create_window()
 
-        # Clear previous content
-        self.text_widget.delete(1.0, tk.END)
+        # Restore from minimized if needed
+        if self.is_minimized:
+            self.restore()
 
-        # Insert new content
+        self.text_widget.delete(1.0, tk.END)
         self.text_widget.insert(1.0, content)
 
-        # Add metadata if provided
         if metadata:
             self.text_widget.insert(tk.END, f"\n\n{'─'*50}\n")
             self.text_widget.insert(tk.END, f"Model: {metadata.get('model', 'unknown')}\n")
             self.text_widget.insert(tk.END, f"Tokens: {metadata.get('tokens_used', 'unknown')}\n")
             self.text_widget.insert(tk.END, f"Time: {metadata.get('timestamp', 'unknown')}\n")
 
-        # Show window
-        self.window.deiconify()
+        # Bring it to front of the z-order without stealing focus
         self.window.lift()
-        self.window.focus_force()
-        self.is_visible = True
+        # Re-assert the macOS attributes (Tk can reset them across operations)
+        _exclude_from_screen_capture(self.window)
 
-    def hide(self):
-        """Hide the overlay"""
-        if self.window:
-            self.window.withdraw()
-            self.is_visible = False
+    def minimize(self):
+        """Collapse the overlay to a tiny pill in the corner. The window
+        stays visible — it just shrinks so it doesn't cover your work."""
+        if not self.window or self.is_minimized:
+            return
+        for frame, _ in self.body_frames:
+            frame.pack_forget()
+        self.mini_frame.pack(fill=tk.BOTH, expand=True)
+        self.is_minimized = True
+        w, h = self.MINI_SIZE
+        self.window.minsize(w, h)
+        pos = _active_screen_top_right(w, h)
+        if pos:
+            x, y = pos
+        else:
+            x = self.window.winfo_screenwidth() - w - 20
+            y = 60
+        self.window.geometry(f"{w}x{h}+{x}+{y}")
+
+    def restore(self):
+        """Expand from the minimized pill back to the full overlay."""
+        if not self.window or not self.is_minimized:
+            return
+        self.mini_frame.pack_forget()
+        for frame, pack_kwargs in self.body_frames:
+            frame.pack(**pack_kwargs)
+        self.is_minimized = False
+        self.window.minsize(300, 220)
+        self._reposition()
+
+    def _reposition(self):
+        """Resize to current compact/expanded size and place on the active screen."""
+        if not self.window:
+            return
+        w, h = self.EXPANDED_SIZE if self.is_expanded else self.COMPACT_SIZE
+        pos = _active_screen_top_right(w, h)
+        if pos:
+            x, y = pos
+        else:
+            x = self.window.winfo_screenwidth() - w - 20
+            y = 60
+        self.window.geometry(f"{w}x{h}+{x}+{y}")
+
+    def toggle_expand(self):
+        """Switch between compact and expanded sizes."""
+        self.is_expanded = not self.is_expanded
+        if self.expand_btn is not None:
+            self.expand_btn.configure(text="⤡" if self.is_expanded else "⤢")
+        self._reposition()
+
+    def _submit_question(self):
+        """Send whatever's in the input field to the agent's callback."""
+        if not self.input_entry or not self.on_submit:
+            return
+        question = self.input_entry.get().strip()
+        if not question:
+            return
+        self.input_entry.delete(0, tk.END)
+        # Indicate that a request is in flight
+        self.text_widget.delete(1.0, tk.END)
+        self.text_widget.insert(1.0, f"Asking: {question}\n\n(thinking...)")
+        try:
+            self.on_submit(question)
+        except Exception as e:
+            print(f"[ERROR] on_submit callback failed: {e}")
 
     def copy_to_clipboard(self):
         """Copy content to clipboard"""
@@ -169,7 +402,10 @@ class ResponseOverlay:
     def destroy(self):
         """Destroy the window"""
         if self.window:
-            self.window.destroy()
+            try:
+                self.window.destroy()
+            except Exception:
+                pass  # Already destroyed (e.g. user closed via X)
             self.window = None
             self.text_widget = None
             self.is_visible = False

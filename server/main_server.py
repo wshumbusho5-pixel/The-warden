@@ -156,30 +156,42 @@ class InvisibleAIServer:
         # Parse display mode from question
         question, display_mode = self._parse_display_mode(question)
 
-        # Build AI prompt based on context
+        # Build AI prompt. Question comes first; screen text is the primary
+        # context. Clipboard is intentionally NOT included by default — it
+        # often contains shell commands or unrelated paste history that
+        # distracts the model from the actual question.
         prompt_parts = []
 
         if question:
-            prompt_parts.append(f"User question: {question}")
+            prompt_parts.append(f"Question: {question}")
 
         if screen_text:
-            prompt_parts.append(f"\nScreen content:\n{screen_text[:1000]}")  # Limit to 1000 chars
-
-        if clipboard:
-            prompt_parts.append(f"\nClipboard: {clipboard[:500]}")  # Limit to 500 chars
+            prompt_parts.append(f"\nWhat's on the user's screen right now (for reference):\n{screen_text[:1500]}")
 
         if not prompt_parts:
-            prompt = "Hello! I'm ready to assist you. What can I help you with?"
+            prompt = "Greet the user briefly and ask what they need."
         else:
             prompt = "\n".join(prompt_parts)
-            prompt += "\n\nProvide helpful assistance based on this context. Be concise and actionable."
+
+        system_prompt = (
+            "You are the user's personal assistant. Answer their question directly "
+            "and concisely. Use the screen-content reference only as supporting "
+            "information when it's relevant to the question — do not analyze, "
+            "describe, or comment on the screen, the user's tools, files, scripts, "
+            "or workflow. Do not ask clarifying questions about why something is "
+            "on their screen. If the question is a general one (definitions, "
+            "explanations, math, code, advice), answer it as asked and ignore "
+            "the screen context. Be brief: respond with just what's needed."
+        )
 
         print(f"[{self._timestamp()}] Display mode: {display_mode}")
         print(f"[{self._timestamp()}] Sending request to {self.ai_provider.name}...")
 
         # Call AI provider
         try:
-            result = self.ai_provider.generate(prompt, max_tokens=2000)
+            result = self.ai_provider.generate(
+                prompt, max_tokens=2000, system=system_prompt
+            )
 
             if result['success']:
                 response_text = result['content']
@@ -246,8 +258,10 @@ class InvisibleAIServer:
 
 def main():
     """Main entry point"""
+    import os
+    enable_display = os.getenv('WARDEN_NO_DISPLAY', '').strip().lower() not in ('1', 'true', 'yes')
     try:
-        server = InvisibleAIServer()
+        server = InvisibleAIServer(enable_server_display=enable_display)
 
         if server.server_display is not None:
             # Tk owns the main thread; run asyncio in a daemon worker.

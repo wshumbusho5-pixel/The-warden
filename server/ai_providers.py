@@ -28,7 +28,7 @@ class AIProvider:
 class ClaudeProvider(AIProvider):
     """Anthropic Claude AI Provider"""
 
-    def __init__(self, api_key=None, model="claude-sonnet-4-20250514"):
+    def __init__(self, api_key=None, model="claude-sonnet-4-6"):
         super().__init__()
         self.name = "Claude (Anthropic)"
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
@@ -43,14 +43,17 @@ class ClaudeProvider(AIProvider):
         """Check if Claude is available"""
         return self.api_key is not None
 
-    def generate(self, prompt, max_tokens=2000):
+    def generate(self, prompt, max_tokens=2000, system=None):
         """Generate response using Claude"""
         try:
-            message = self.client.messages.create(
+            kwargs = dict(
                 model=self.model,
                 max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}]
+                messages=[{"role": "user", "content": prompt}],
             )
+            if system:
+                kwargs["system"] = system
+            message = self.client.messages.create(**kwargs)
 
             return {
                 'success': True,
@@ -86,12 +89,16 @@ class OpenAIProvider(AIProvider):
         """Check if OpenAI is available"""
         return self.api_key is not None
 
-    def generate(self, prompt, max_tokens=2000):
+    def generate(self, prompt, max_tokens=2000, system=None):
         """Generate response using OpenAI"""
         try:
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
             response = openai.chat.completions.create(
                 model=self.model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
                 max_tokens=max_tokens
             )
 
@@ -140,7 +147,7 @@ class OllamaProvider(AIProvider):
         except:
             return []
 
-    def generate(self, prompt, max_tokens=2000):
+    def generate(self, prompt, max_tokens=2000, system=None):
         """Generate response using Ollama"""
         try:
             payload = {
@@ -152,6 +159,8 @@ class OllamaProvider(AIProvider):
                     "temperature": 0.7
                 }
             }
+            if system:
+                payload["system"] = system
 
             response = requests.post(
                 self.api_url,
@@ -209,7 +218,7 @@ class AIProviderFactory:
         if provider_type == 'claude':
             return ClaudeProvider(
                 api_key=kwargs.get('api_key'),
-                model=kwargs.get('model', 'claude-sonnet-4-20250514')
+                model=kwargs.get('model', 'claude-sonnet-4-6')
             )
 
         elif provider_type == 'openai':
