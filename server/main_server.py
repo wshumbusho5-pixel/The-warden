@@ -9,6 +9,7 @@ import websockets
 import json
 import os
 import re
+import threading
 from dotenv import load_dotenv
 from datetime import datetime
 from server_display import ServerDisplay
@@ -50,11 +51,13 @@ class InvisibleAIServer:
 
         self.connected_clients = set()
 
-        # Initialize server display
+        # Initialize server display. Tk requires its window be created on the
+        # main thread on macOS, so we build it here (main() runs us on the main
+        # thread) and main() will drive mainloop while asyncio runs on a worker.
         self.server_display = None
         if enable_server_display:
             self.server_display = ServerDisplay()
-            self.server_display.run_in_thread()
+            self.server_display.create_window()
 
         print(f"[{self._timestamp()}] Invisible AI Server initialized")
         print(f"[{self._timestamp()}] AI Provider: {self.ai_provider.name}")
@@ -245,7 +248,19 @@ def main():
     """Main entry point"""
     try:
         server = InvisibleAIServer()
-        asyncio.run(server.start_server())
+
+        if server.server_display is not None:
+            # Tk owns the main thread; run asyncio in a daemon worker.
+            def _run_asyncio():
+                try:
+                    asyncio.run(server.start_server())
+                except Exception as e:
+                    print(f"[asyncio] {e}")
+
+            threading.Thread(target=_run_asyncio, daemon=True).start()
+            server.server_display.run()  # blocks on Tk mainloop
+        else:
+            asyncio.run(server.start_server())
     except KeyboardInterrupt:
         print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Server stopped by user")
     except Exception as e:

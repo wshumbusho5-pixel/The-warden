@@ -5,7 +5,6 @@ Shows AI responses on the main computer
 
 import tkinter as tk
 from tkinter import scrolledtext
-import threading
 
 
 class ServerDisplay:
@@ -162,44 +161,36 @@ Press F1 on any connected client to activate AI.
         self.text_widget.insert(1.0, welcome, 'metadata')
 
     def append_response(self, content, metadata=None, client_id=None):
-        """
-        Append a new response to the display
+        # Thread-safe: marshal onto Tk main thread via the event queue.
+        if self.window is None:
+            return
+        self.window.after(
+            0, lambda: self._append_response_main(content, metadata, client_id)
+        )
 
-        Args:
-            content: Response text
-            metadata: Optional metadata dict
-            client_id: ID of client that sent request
-        """
+    def _append_response_main(self, content, metadata, client_id):
         self.response_count += 1
-
-        # Update stats
         self.stats_label.config(text=f"Responses: {self.response_count}")
 
-        # Add separator
         if self.response_count > 1:
             self.text_widget.insert(tk.END, "\n" + "━" * 80 + "\n\n", 'separator')
 
-        # Add header
         header = f"Response #{self.response_count}"
         if client_id:
             header += f" (Client: {client_id})"
         header += "\n"
         self.text_widget.insert(tk.END, header, 'header')
 
-        # Add content
         self.text_widget.insert(tk.END, content + "\n")
 
-        # Add metadata
         if metadata:
             meta_text = f"\nModel: {metadata.get('model', 'unknown')} | "
             meta_text += f"Tokens: {metadata.get('tokens_used', 'unknown')} | "
             meta_text += f"Time: {metadata.get('timestamp', 'unknown')}\n"
             self.text_widget.insert(tk.END, meta_text, 'metadata')
 
-        # Auto-scroll to bottom
         self.text_widget.see(tk.END)
 
-        # Show window if hidden
         if not self.is_visible:
             self.show()
 
@@ -235,16 +226,10 @@ Press F1 on any connected client to activate AI.
             print("[INFO] Content copied to clipboard")
 
     def run(self):
-        """Run the display window (blocking)"""
+        """Run the display window (blocking). Must be called on the main thread."""
         if self.window is None:
             self.create_window()
         self.window.mainloop()
-
-    def run_in_thread(self):
-        """Run the display in a separate thread"""
-        thread = threading.Thread(target=self.run, daemon=True)
-        thread.start()
-        return thread
 
 
 # Test

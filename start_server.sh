@@ -5,4 +5,4 @@ echo ""
 
 cd "$(dirname "$0")"
 source venv/bin/activate
-python server/main_server.py
+python -u server/main_server.py
