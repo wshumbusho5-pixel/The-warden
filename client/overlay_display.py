@@ -120,7 +120,7 @@ class ResponseOverlay:
 
         # Create main window
         self.window = tk.Tk()
-        self.window.title("AI Assistant")
+        self.window.title("TextKit")
 
         # Make the Python app an accessory (improves Spaces behavior) before
         # the NSWindow is fully realized.
@@ -144,7 +144,7 @@ class ResponseOverlay:
 
         title_label = tk.Label(
             title_frame,
-            text="🤖 Invisible AI Assistant",
+            text="TextKit",
             bg='#2d2d2d',
             fg='#ffffff',
             font=('Arial', 12, 'bold'),
@@ -189,7 +189,7 @@ class ResponseOverlay:
         self.mini_frame = tk.Frame(self.window, bg='#1e1e1e')
         mini_label = tk.Label(
             self.mini_frame,
-            text="🤖  click to expand",
+            text="TextKit",
             bg='#1e1e1e',
             fg='#ffffff',
             font=('Arial', 11),
@@ -320,10 +320,11 @@ class ResponseOverlay:
             self.text_widget.insert(tk.END, f"Tokens: {metadata.get('tokens_used', 'unknown')}\n")
             self.text_widget.insert(tk.END, f"Time: {metadata.get('timestamp', 'unknown')}\n")
 
-        # Bring it to front of the z-order without stealing focus
+        # Bring it to front of the z-order without stealing focus.
+        # NSWindow attributes (sharing, collection, level) were set at
+        # create_window and are sticky — re-applying on every show caused
+        # PyObjC native crashes after many calls.
         self.window.lift()
-        # Re-assert the macOS attributes (Tk can reset them across operations)
-        _exclude_from_screen_capture(self.window)
 
     def minimize(self):
         """Collapse the overlay to a tiny pill in the corner. The window

@@ -20,17 +20,91 @@ from keyboard_listener import KeyboardListener
 from overlay_display import ResponseOverlay
 
 
-def _load_hotkey(default='f1'):
-    config_path = os.path.join(os.path.dirname(__file__), 'config.yaml')
-    try:
-        with open(config_path) as f:
-            cfg = yaml.safe_load(f) or {}
-        return cfg.get('keyboard', {}).get('hotkey', default)
-    except Exception:
-        return default
+def _load_keyboard_config():
+    """Returns (hotkey_question, hotkey_capture) tuple. Falls back to defaults."""
+    candidates = [os.path.join(os.path.dirname(__file__), 'config.yaml')]
+    if hasattr(sys, '_MEIPASS'):
+        candidates.append(os.path.join(sys._MEIPASS, 'client', 'config.yaml'))
+    for path in candidates:
+        try:
+            with open(path) as f:
+                cfg = yaml.safe_load(f) or {}
+            kb = cfg.get('keyboard', {}) or {}
+            return (
+                kb.get('hotkey_question', 'left+s'),
+                kb.get('hotkey_capture', kb.get('hotkey', 'left+a')),
+            )
+        except Exception:
+            continue
+    return ('left+s', 'left+a')
 
-# Load environment variables
-load_dotenv()
+
+def _load_hotkey(default='ctrl+alt+a'):
+    """Legacy single-hotkey getter. Returns the capture hotkey."""
+    return _load_keyboard_config()[1]
+
+
+def _ensure_server_running(host='127.0.0.1', port=8765, wait_seconds=12):
+    """If the server isn't already listening on `port`, start it inside this
+    same process on a daemon thread. Avoids subprocessing — when the client
+    is bundled with PyInstaller, sys.executable points to the bundled
+    binary, not Python, so subprocess.Popen([sys.executable, ...]) doesn't
+    work the way it would for a normal script."""
+    import socket
+    import threading
+    import time
+
+    def is_open():
+        # Use connect_ex so we don't compete with the server's own bind on
+        # the same port. (Bind-probing creates a race that can prevent the
+        # server from binding at all.)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.4)
+            return s.connect_ex((host, port)) == 0
+
+    if is_open():
+        return None
+
+    if hasattr(sys, '_MEIPASS'):
+        server_dir = os.path.join(sys._MEIPASS, 'server')
+    else:
+        server_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'server',
+        )
+    if not os.path.isdir(server_dir):
+        print(f"[WARN] server dir not found at {server_dir}; skipping auto-start")
+        return None
+
+    sys.path.insert(0, server_dir)
+    os.environ['WARDEN_NO_DISPLAY'] = '1'
+
+    def _run_server():
+        try:
+            from main_server import InvisibleAIServer
+            server = InvisibleAIServer(enable_server_display=False)
+            asyncio.run(server.start_server(host=host, port=port))
+        except Exception as e:
+            print(f"[ERROR] embedded server crashed: {e}")
+
+    t = threading.Thread(target=_run_server, daemon=True)
+    t.start()
+
+    deadline = time.time() + wait_seconds
+    while time.time() < deadline:
+        if is_open():
+            return t
+        time.sleep(0.4)
+    print("[WARN] embedded server did not become reachable in time")
+    return t
+
+
+# Load environment variables. In a PyInstaller bundle the cwd isn't the
+# project root, so we have to point dotenv at the bundled .env explicitly.
+if hasattr(sys, '_MEIPASS'):
+    load_dotenv(os.path.join(sys._MEIPASS, '.env'))
+else:
+    load_dotenv()
 
 
 class InvisibleAgentPro:
@@ -49,10 +123,14 @@ class InvisibleAgentPro:
 
         # Initialize components
         self.screen_capture = ScreenCapture()
-        self.hotkey = _load_hotkey()
+        self.hotkey_question, self.hotkey_capture = _load_keyboard_config()
+        self.hotkey = self.hotkey_capture  # legacy single-hotkey display
         self.keyboard_listener = KeyboardListener(
-            callback=self.on_hotkey_activated,
-            hotkey=self.hotkey
+            bindings={
+                self.hotkey_question: self.on_focus_input,
+                self.hotkey_capture: self.on_hotkey_activated,
+            },
+            hotkey=self.hotkey_capture
         )
         self.overlay = ResponseOverlay()
 
@@ -191,11 +269,25 @@ class InvisibleAgentPro:
             self.overlay.show(content, metadata)
 
     def on_hotkey_activated(self):
-        """Called when user presses the hotkey"""
+        """Called when user presses the capture hotkey (Left+A)."""
         print(f"\n{'='*60}")
-        print(f"  🔥 AI ASSISTANT ACTIVATED")
+        print(f"  🔥 AI ASSISTANT ACTIVATED (capture)")
         print(f"{'='*60}\n")
         self._run_request("Help me with what's on my screen", use_screen=True)
+
+    def on_focus_input(self):
+        """Called when user presses the type-only hotkey (Left+S).
+        Brings the overlay forward and focuses the input field. No screen
+        capture, no recording indicator."""
+        print(f"\n[{self._timestamp()}] ✏️  Focus overlay input")
+        if self.overlay.window is not None:
+            def _do():
+                if self.overlay.is_minimized:
+                    self.overlay.restore()
+                self.overlay.window.lift()
+                if self.overlay.input_entry is not None:
+                    self.overlay.input_entry.focus_force()
+            self.overlay.window.after(0, _do)
 
     def on_user_question(self, question):
         """Called when the user types a question into the overlay input."""
@@ -232,10 +324,11 @@ class InvisibleAgentPro:
         print(f"  Invisible AI Assistant - Background Mode")
         print(f"{'='*60}")
         print(f"  Server: {self.server_url}")
-        print(f"  Hotkey: {self.hotkey}")
+        print(f"  Hotkey (type):    {self.hotkey_question}  (no screen capture)")
+        print(f"  Hotkey (capture): {self.hotkey_capture}  (with screen + recording indicator)")
         print(f"  Status: Running invisibly...")
         print(f"{'='*60}\n")
-        print(f"[{self._timestamp()}] Press {self.hotkey} to activate AI")
+        print(f"[{self._timestamp()}] Press {self.hotkey_question} to type, {self.hotkey_capture} to capture")
         print(f"[{self._timestamp()}] Press Ctrl+C to stop\n")
 
         self.running = True
@@ -339,6 +432,24 @@ def main():
                         help='Server port (default: 8765)')
 
     args = parser.parse_args()
+
+    # Single-instance guard: if another TextKit is already listening on the
+    # port, don't start a second one — they'd fight for the keyboard hook.
+    import socket as _socket
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as _s:
+            _s.settimeout(0.4)
+            already = _s.connect_ex(('127.0.0.1', args.port)) == 0
+    except OSError:
+        already = False
+    if already:
+        print(f"[INFO] Another TextKit is already running on port {args.port}; exiting.")
+        return
+
+    # If we're running as a bundled app or the server isn't already up,
+    # spawn it ourselves so the user gets a single-launch experience.
+    if not args.server_ip or args.server_ip in ('localhost', '127.0.0.1'):
+        _ensure_server_running(port=args.port)
 
     # Create agent
     agent = InvisibleAgentPro(server_ip=args.server_ip, server_port=args.port)

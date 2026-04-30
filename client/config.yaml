@@ -11,11 +11,16 @@ display:
 
 # Keyboard Settings
 keyboard:
-  # Global hotkey to activate AI
-  hotkey: 'ctrl+alt+a'
+  # Type-only hotkey: focuses the overlay's input field. No screen capture,
+  # no macOS recording indicator. Use this for asking questions directly.
+  hotkey_question: 'ctrl+alt+s'
 
-  # Alternative: 'ctrl+shift+p', 'alt+space', etc.
-  # hotkey: 'ctrl+shift+a'
+  # Capture hotkey: captures the screen + auto-asks "what's on my screen?".
+  # Triggers macOS's screen-recording indicator (unavoidable). Use sparingly.
+  hotkey_capture: 'ctrl+alt+a'
+
+  # Legacy single-hotkey field (still read for back-compat).
+  hotkey: 'ctrl+alt+a'
 
 # Screen Capture Settings
 screen_capture:

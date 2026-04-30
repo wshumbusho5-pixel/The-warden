@@ -2,11 +2,22 @@
 Screen capture and OCR functionality
 """
 
+import os
 import pyautogui
 import pytesseract
 from PIL import Image, ImageGrab
 import io
 from datetime import datetime
+
+
+# Apps launched from Finder don't inherit the shell PATH, so pytesseract
+# (which shells out to the `tesseract` binary) can't find it. Point at the
+# homebrew install explicitly. Falls back silently if the path doesn't
+# exist (e.g., on a different machine where tesseract is elsewhere on PATH).
+for _candidate in ('/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract'):
+    if os.path.isfile(_candidate):
+        pytesseract.pytesseract.tesseract_cmd = _candidate
+        break
 
 
 class ScreenCapture:

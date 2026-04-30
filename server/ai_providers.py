@@ -37,7 +37,8 @@ class ClaudeProvider(AIProvider):
         if not self.api_key:
             raise ValueError("ANTHROPIC_API_KEY not found")
 
-        self.client = Anthropic(api_key=self.api_key)
+        # Bump default timeout (default ~60s can be too short on slow links).
+        self.client = Anthropic(api_key=self.api_key, timeout=120.0, max_retries=2)
 
     def is_available(self):
         """Check if Claude is available"""

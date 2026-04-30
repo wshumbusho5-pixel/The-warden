@@ -7,4 +7,4 @@ cd "$(dirname "$0")"
 source venv/bin/activate
 
 # Run in background mode by default
-python client/invisible_agent.py --mode background $@
+python client/main.py --mode background $@
