@@ -137,6 +137,9 @@ class InvisibleAgentPro:
         # State
         self.running = False
         self.request_count = 0
+        # Last N exchanges for multi-turn memory: [{role, content}, ...]
+        self.history = []
+        self.HISTORY_LIMIT = 10  # 5 user/assistant pairs
 
         print(f"[{self._timestamp()}] Invisible Agent Pro initialized")
         print(f"[{self._timestamp()}] Server: {self.server_url}")
@@ -204,6 +207,8 @@ class InvisibleAgentPro:
 
                 # Capture context
                 context = self.capture_context(question, use_screen)
+                # Include the running conversation history so follow-ups have memory
+                context['history'] = list(self.history)
 
                 # Build request
                 request = {
@@ -223,6 +228,17 @@ class InvisibleAgentPro:
                 response_data = json.loads(response)
 
                 print(f"[{self._timestamp()}] Response received!")
+
+                # Update conversation memory on a successful exchange
+                if response_data.get('type') == 'response':
+                    answer = response_data.get('content', '')
+                    if question:
+                        self.history.append({'role': 'user', 'content': question})
+                    if answer:
+                        self.history.append({'role': 'assistant', 'content': answer})
+                    # Trim to most recent N entries
+                    if len(self.history) > self.HISTORY_LIMIT:
+                        self.history = self.history[-self.HISTORY_LIMIT:]
 
                 return response_data
 

@@ -44,13 +44,17 @@ class ClaudeProvider(AIProvider):
         """Check if Claude is available"""
         return self.api_key is not None
 
-    def generate(self, prompt, max_tokens=2000, system=None):
-        """Generate response using Claude"""
+    def generate(self, prompt, max_tokens=2000, system=None, history=None):
+        """Generate response using Claude. `history` is a list of prior
+        {role, content} message dicts; the new `prompt` is appended as the
+        final user message."""
         try:
+            messages = list(history) if history else []
+            messages.append({"role": "user", "content": prompt})
             kwargs = dict(
                 model=self.model,
                 max_tokens=max_tokens,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
             )
             if system:
                 kwargs["system"] = system
@@ -90,12 +94,14 @@ class OpenAIProvider(AIProvider):
         """Check if OpenAI is available"""
         return self.api_key is not None
 
-    def generate(self, prompt, max_tokens=2000, system=None):
+    def generate(self, prompt, max_tokens=2000, system=None, history=None):
         """Generate response using OpenAI"""
         try:
             messages = []
             if system:
                 messages.append({"role": "system", "content": system})
+            if history:
+                messages.extend(history)
             messages.append({"role": "user", "content": prompt})
             response = openai.chat.completions.create(
                 model=self.model,
@@ -148,8 +154,14 @@ class OllamaProvider(AIProvider):
         except:
             return []
 
-    def generate(self, prompt, max_tokens=2000, system=None):
-        """Generate response using Ollama"""
+    def generate(self, prompt, max_tokens=2000, system=None, history=None):
+        """Generate response using Ollama. (history is currently flattened
+        into the prompt — Ollama's /api/generate doesn't take messages.)"""
+        if history:
+            prefix = "\n\n".join(
+                f"{m['role'].capitalize()}: {m['content']}" for m in history
+            )
+            prompt = f"{prefix}\n\nUser: {prompt}\n\nAssistant:"
         try:
             payload = {
                 "model": self.model,

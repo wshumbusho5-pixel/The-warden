@@ -152,6 +152,7 @@ class InvisibleAIServer:
         screen_text = context.get('screen_text', '')
         clipboard = context.get('clipboard', '')
         question = context.get('question', '')
+        history = context.get('history', []) or []
 
         # Parse display mode from question
         question, display_mode = self._parse_display_mode(question)
@@ -191,7 +192,7 @@ class InvisibleAIServer:
         # Call AI provider
         try:
             result = self.ai_provider.generate(
-                prompt, max_tokens=2000, system=system_prompt
+                prompt, max_tokens=2000, system=system_prompt, history=history
             )
 
             if result['success']:

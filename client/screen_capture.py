@@ -2,22 +2,83 @@
 Screen capture and OCR functionality
 """
 
-import os
-import pyautogui
-import pytesseract
-from PIL import Image, ImageGrab
 import io
+import os
 from datetime import datetime
 
+import pyautogui
+from PIL import Image, ImageGrab
 
-# Apps launched from Finder don't inherit the shell PATH, so pytesseract
-# (which shells out to the `tesseract` binary) can't find it. Point at the
-# homebrew install explicitly. Falls back silently if the path doesn't
-# exist (e.g., on a different machine where tesseract is elsewhere on PATH).
-for _candidate in ('/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract'):
-    if os.path.isfile(_candidate):
-        pytesseract.pytesseract.tesseract_cmd = _candidate
-        break
+
+# Try to use Apple's Vision framework first (better accuracy, ships with
+# macOS, no external binary). Fall back to Tesseract via pytesseract on
+# error or non-macOS systems.
+_VISION_AVAILABLE = False
+try:
+    from Vision import (
+        VNRecognizeTextRequest,
+        VNImageRequestHandler,
+        VNRequestTextRecognitionLevelAccurate,
+    )
+    from Foundation import NSData
+    from Quartz import (
+        CGImageSourceCreateWithData,
+        CGImageSourceCreateImageAtIndex,
+    )
+    _VISION_AVAILABLE = True
+except Exception:
+    _VISION_AVAILABLE = False
+
+try:
+    import pytesseract
+    for _candidate in ('/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract'):
+        if os.path.isfile(_candidate):
+            pytesseract.pytesseract.tesseract_cmd = _candidate
+            break
+except ImportError:
+    pytesseract = None
+
+
+def _ocr_with_vision(pil_image):
+    """Run OCR via Apple's Vision framework. Returns extracted text."""
+    buf = io.BytesIO()
+    pil_image.save(buf, format='PNG')
+    png_bytes = buf.getvalue()
+
+    nsdata = NSData.dataWithBytes_length_(png_bytes, len(png_bytes))
+    source = CGImageSourceCreateWithData(nsdata, None)
+    if source is None:
+        return ""
+    cg_image = CGImageSourceCreateImageAtIndex(source, 0, None)
+    if cg_image is None:
+        return ""
+
+    request = VNRecognizeTextRequest.alloc().init()
+    request.setRecognitionLevel_(VNRequestTextRecognitionLevelAccurate)
+    request.setUsesLanguageCorrection_(True)
+
+    handler = VNImageRequestHandler.alloc().initWithCGImage_options_(cg_image, None)
+    ok, _err = handler.performRequests_error_([request], None)
+    if not ok:
+        return ""
+
+    results = request.results() or []
+    lines = []
+    for observation in results:
+        candidates = observation.topCandidates_(1)
+        if candidates:
+            lines.append(candidates[0].string())
+    return "\n".join(lines)
+
+
+def _ocr_with_tesseract(pil_image):
+    if pytesseract is None:
+        return ""
+    try:
+        return pytesseract.image_to_string(pil_image).strip()
+    except Exception as e:
+        print(f"[ERROR] Tesseract OCR failed: {e}")
+        return ""
 
 
 class ScreenCapture:
@@ -61,30 +122,20 @@ class ScreenCapture:
         return self.capture_screen()
 
     def extract_text_from_image(self, image):
-        """
-        Extract text from image using OCR
-
-        Args:
-            image: PIL Image object
-
-        Returns:
-            Extracted text as string
-        """
-        try:
-            if image is None:
-                return ""
-
-            # Use pytesseract to extract text
-            text = pytesseract.image_to_string(image)
-            self.last_text = text
-            return text.strip()
-        except Exception as e:
-            print(f"[ERROR] OCR failed: {e}")
-            print(f"[INFO] Make sure tesseract is installed:")
-            print(f"       macOS: brew install tesseract")
-            print(f"       Ubuntu: sudo apt-get install tesseract-ocr")
-            print(f"       Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki")
+        """Extract text from image using OCR. Prefers Vision (macOS),
+        falls back to Tesseract."""
+        if image is None:
             return ""
+        text = ""
+        if _VISION_AVAILABLE:
+            try:
+                text = _ocr_with_vision(image)
+            except Exception as e:
+                print(f"[WARN] Vision OCR failed: {e}; falling back to Tesseract")
+        if not text:
+            text = _ocr_with_tesseract(image)
+        self.last_text = text
+        return (text or "").strip()
 
     def capture_and_extract(self, region=None):
         """
