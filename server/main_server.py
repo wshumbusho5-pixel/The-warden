@@ -9,6 +9,7 @@ import websockets
 import json
 import os
 import re
+import hmac
 import threading
 from dotenv import load_dotenv
 from datetime import datetime
@@ -51,6 +52,10 @@ class InvisibleAIServer:
 
         self.connected_clients = set()
 
+        # Bearer token required on the WS handshake. If unset, auth is disabled
+        # — fine for localhost-only, NOT safe to expose publicly.
+        self.auth_token = os.getenv('WARDEN_AUTH_TOKEN', '').strip()
+
         # Initialize server display. Tk requires its window be created on the
         # main thread on macOS, so we build it here (main() runs us on the main
         # thread) and main() will drive mainloop while asyncio runs on a worker.
@@ -63,6 +68,10 @@ class InvisibleAIServer:
         print(f"[{self._timestamp()}] AI Provider: {self.ai_provider.name}")
         if hasattr(self.ai_provider, 'model'):
             print(f"[{self._timestamp()}] Model: {self.ai_provider.model}")
+        if self.auth_token:
+            print(f"[{self._timestamp()}] Auth: ENABLED (bearer token required)")
+        else:
+            print(f"[{self._timestamp()}] Auth: DISABLED — set WARDEN_AUTH_TOKEN to require a token")
 
     def _timestamp(self):
         """Generate timestamp for logging"""
@@ -104,9 +113,25 @@ class InvisibleAIServer:
 
     async def handle_client(self, websocket):
         """Handle incoming client connections"""
+        client_id = id(websocket)
+
+        # Enforce bearer token on the handshake if configured.
+        if self.auth_token:
+            provided = ''
+            try:
+                auth_header = websocket.request.headers.get('Authorization', '') or ''
+                if auth_header.startswith('Bearer '):
+                    provided = auth_header[len('Bearer '):].strip()
+            except Exception:
+                provided = ''
+            if not hmac.compare_digest(provided, self.auth_token):
+                peer = getattr(websocket, 'remote_address', '?')
+                print(f"[{self._timestamp()}] Rejected unauthenticated connection from {peer}")
+                await websocket.close(code=4401, reason='unauthorized')
+                return
+
         # Register client
         self.connected_clients.add(websocket)
-        client_id = id(websocket)
         print(f"[{self._timestamp()}] Client {client_id} connected. Total clients: {len(self.connected_clients)}")
 
         try:
@@ -153,6 +178,7 @@ class InvisibleAIServer:
         clipboard = context.get('clipboard', '')
         question = context.get('question', '')
         history = context.get('history', []) or []
+        pinned_context = context.get('pinned_context', '') or ''
 
         # Parse display mode from question
         question, display_mode = self._parse_display_mode(question)
@@ -192,7 +218,11 @@ class InvisibleAIServer:
         # Call AI provider
         try:
             result = self.ai_provider.generate(
-                prompt, max_tokens=2000, system=system_prompt, history=history
+                prompt,
+                max_tokens=2000,
+                system=system_prompt,
+                history=history,
+                pinned_context=pinned_context,
             )
 
             if result['success']:

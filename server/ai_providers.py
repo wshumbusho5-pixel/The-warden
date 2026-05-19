@@ -44,10 +44,15 @@ class ClaudeProvider(AIProvider):
         """Check if Claude is available"""
         return self.api_key is not None
 
-    def generate(self, prompt, max_tokens=2000, system=None, history=None):
-        """Generate response using Claude. `history` is a list of prior
-        {role, content} message dicts; the new `prompt` is appended as the
-        final user message."""
+    def generate(self, prompt, max_tokens=2000, system=None, history=None, pinned_context=None):
+        """Generate response using Claude.
+
+        `history` — prior {role, content} dicts; new `prompt` becomes the
+            final user turn.
+        `pinned_context` — persistent user-set text (their study material,
+            notes, etc.). Sent as a separate cacheable system block so the
+            tokens are paid for once per 5-minute window.
+        """
         try:
             messages = list(history) if history else []
             messages.append({"role": "user", "content": prompt})
@@ -56,16 +61,36 @@ class ClaudeProvider(AIProvider):
                 max_tokens=max_tokens,
                 messages=messages,
             )
+            system_blocks = []
             if system:
-                kwargs["system"] = system
+                system_blocks.append({
+                    "type": "text",
+                    "text": system,
+                    "cache_control": {"type": "ephemeral"},
+                })
+            if pinned_context:
+                system_blocks.append({
+                    "type": "text",
+                    "text": f"Persistent context the user has pinned:\n{pinned_context}",
+                    "cache_control": {"type": "ephemeral"},
+                })
+            if system_blocks:
+                kwargs["system"] = system_blocks
             message = self.client.messages.create(**kwargs)
+
+            usage = message.usage
+            cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
+            cache_creation = getattr(usage, 'cache_creation_input_tokens', 0) or 0
+            tokens_used = usage.input_tokens + usage.output_tokens
+            if cache_read or cache_creation:
+                print(f"[cache] read={cache_read} created={cache_creation}")
 
             return {
                 'success': True,
                 'content': message.content[0].text,
                 'model': self.model,
                 'provider': 'claude',
-                'tokens_used': message.usage.input_tokens + message.usage.output_tokens
+                'tokens_used': tokens_used,
             }
 
         except Exception as e:
@@ -94,12 +119,14 @@ class OpenAIProvider(AIProvider):
         """Check if OpenAI is available"""
         return self.api_key is not None
 
-    def generate(self, prompt, max_tokens=2000, system=None, history=None):
+    def generate(self, prompt, max_tokens=2000, system=None, history=None, pinned_context=None):
         """Generate response using OpenAI"""
         try:
             messages = []
             if system:
                 messages.append({"role": "system", "content": system})
+            if pinned_context:
+                messages.append({"role": "system", "content": f"Pinned context:\n{pinned_context}"})
             if history:
                 messages.extend(history)
             messages.append({"role": "user", "content": prompt})
@@ -154,9 +181,11 @@ class OllamaProvider(AIProvider):
         except:
             return []
 
-    def generate(self, prompt, max_tokens=2000, system=None, history=None):
+    def generate(self, prompt, max_tokens=2000, system=None, history=None, pinned_context=None):
         """Generate response using Ollama. (history is currently flattened
         into the prompt — Ollama's /api/generate doesn't take messages.)"""
+        if pinned_context:
+            prompt = f"Pinned context:\n{pinned_context}\n\n{prompt}"
         if history:
             prefix = "\n\n".join(
                 f"{m['role'].capitalize()}: {m['content']}" for m in history

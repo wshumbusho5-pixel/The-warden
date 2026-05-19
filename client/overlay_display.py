@@ -103,6 +103,7 @@ class ResponseOverlay:
         self.window = None
         self.text_widget = None
         self.input_entry = None
+        self.pin_text = None  # Text widget for the persistent pinned context
         self.expand_btn = None
         self.minimize_btn = None
         # Each entry: (frame, pack_kwargs_dict). Hidden when minimized.
@@ -112,6 +113,7 @@ class ResponseOverlay:
         self.is_visible = True
         self.is_expanded = False
         self.is_minimized = False
+        self._pin_save_after_id = None
 
     def create_window(self):
         """Create the overlay window"""
@@ -198,6 +200,41 @@ class ResponseOverlay:
         mini_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
         mini_label.bind('<Button-1>', lambda e: self.restore())
         # mini_frame is NOT packed by default — only when minimized.
+
+        # Pinned-context box: persistent text included with every request.
+        # Stays put until the user edits it. Saved to disk so it survives
+        # restarts.
+        pin_frame = tk.Frame(self.window, bg='#1e1e1e')
+        pin_pack = dict(fill=tk.X, padx=10, pady=(10, 0))
+        pin_frame.pack(**pin_pack)
+        pin_header = tk.Label(
+            pin_frame,
+            text="📌  Pinned context (sent every request)",
+            bg='#1e1e1e',
+            fg='#888888',
+            font=('Arial', 9),
+            anchor='w',
+        )
+        pin_header.pack(fill=tk.X)
+        self.pin_text = tk.Text(
+            pin_frame,
+            height=3,
+            wrap=tk.WORD,
+            bg='#252525',
+            fg='#cccccc',
+            insertbackground='white',
+            font=('Arial', 10),
+            relief=tk.FLAT,
+            padx=8,
+            pady=6,
+        )
+        self.pin_text.pack(fill=tk.X)
+        self.pin_text.bind('<KeyRelease>', lambda e: self._schedule_pin_save())
+        # Load any previously-saved pin
+        prior = self._load_pin_from_disk()
+        if prior:
+            self.pin_text.insert('1.0', prior)
+        self.body_frames.append((pin_frame, pin_pack))
 
         # Text display area
         text_frame = tk.Frame(self.window, bg='#1e1e1e')
@@ -375,6 +412,51 @@ class ResponseOverlay:
         if self.expand_btn is not None:
             self.expand_btn.configure(text="⤡" if self.is_expanded else "⤢")
         self._reposition()
+
+    # --- Pinned-context persistence ---------------------------------------
+
+    @staticmethod
+    def _pin_storage_path():
+        import os
+        base = os.path.expanduser('~/Library/Application Support/TextKit')
+        try:
+            os.makedirs(base, exist_ok=True)
+        except Exception:
+            pass
+        return os.path.join(base, 'pin.txt')
+
+    def _load_pin_from_disk(self):
+        try:
+            with open(self._pin_storage_path(), 'r', encoding='utf-8') as f:
+                return f.read()
+        except FileNotFoundError:
+            return ''
+        except Exception as e:
+            print(f"[WARN] failed to load pin: {e}")
+            return ''
+
+    def _schedule_pin_save(self):
+        if self._pin_save_after_id is not None:
+            try:
+                self.window.after_cancel(self._pin_save_after_id)
+            except Exception:
+                pass
+        self._pin_save_after_id = self.window.after(500, self._save_pin)
+
+    def _save_pin(self):
+        self._pin_save_after_id = None
+        try:
+            content = self.get_pin()
+            with open(self._pin_storage_path(), 'w', encoding='utf-8') as f:
+                f.write(content)
+        except Exception as e:
+            print(f"[WARN] failed to save pin: {e}")
+
+    def get_pin(self):
+        """Return the current pinned-context text (stripped)."""
+        if self.pin_text is None:
+            return ''
+        return self.pin_text.get('1.0', 'end-1c').strip()
 
     def _submit_question(self):
         """Send whatever's in the input field to the agent's callback."""

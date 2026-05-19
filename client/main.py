@@ -117,9 +117,20 @@ class InvisibleAgentPro:
     """
 
     def __init__(self, server_ip=None, server_port=8765):
-        self.server_ip = server_ip or os.getenv("MAIN_COMPUTER_IP", "localhost")
-        self.server_port = server_port
-        self.server_url = f"ws://{self.server_ip}:{self.server_port}"
+        # WARDEN_SERVER_URL (e.g. wss://warden.example.com) takes precedence
+        # so production hosts can point at a reverse proxy without caring
+        # about IP/port. Fallback is the legacy ws://{ip}:{port} form.
+        explicit_url = os.getenv("WARDEN_SERVER_URL", "").strip()
+        if explicit_url:
+            self.server_url = explicit_url
+            self.server_ip = explicit_url
+            self.server_port = server_port
+        else:
+            self.server_ip = server_ip or os.getenv("MAIN_COMPUTER_IP", "localhost")
+            self.server_port = server_port
+            self.server_url = f"ws://{self.server_ip}:{self.server_port}"
+
+        self.auth_token = os.getenv("WARDEN_AUTH_TOKEN", "").strip()
 
         # Initialize components
         self.screen_capture = ScreenCapture()
@@ -139,7 +150,11 @@ class InvisibleAgentPro:
         self.request_count = 0
         # Last N exchanges for multi-turn memory: [{role, content}, ...]
         self.history = []
-        self.HISTORY_LIMIT = 10  # 5 user/assistant pairs
+        self.HISTORY_LIMIT = 5  # last 5 messages — 2-3 exchanges, lean and cheap
+        # Auto-flush history if no activity for this many seconds — prevents
+        # yesterday's chemistry context bleeding into today's psych session.
+        self.HISTORY_IDLE_FLUSH_SECONDS = 30 * 60
+        self._last_request_at = 0.0
 
         print(f"[{self._timestamp()}] Invisible Agent Pro initialized")
         print(f"[{self._timestamp()}] Server: {self.server_url}")
@@ -199,16 +214,42 @@ class InvisibleAgentPro:
         """
         self.request_count += 1
 
+        # Flush stale history after a period of inactivity so old topics
+        # don't contaminate a fresh session.
+        import time as _time
+        now = _time.time()
+        if (
+            self.history
+            and self._last_request_at
+            and (now - self._last_request_at) > self.HISTORY_IDLE_FLUSH_SECONDS
+        ):
+            print(f"[{self._timestamp()}] Idle for >30 min — flushing conversation history")
+            self.history = []
+        self._last_request_at = now
+
         try:
             print(f"[{self._timestamp()}] Connecting to server...")
 
-            async with websockets.connect(self.server_url) as websocket:
+            connect_kwargs = {}
+            if self.auth_token:
+                connect_kwargs['additional_headers'] = {
+                    'Authorization': f'Bearer {self.auth_token}',
+                }
+
+            async with websockets.connect(self.server_url, **connect_kwargs) as websocket:
                 print(f"[{self._timestamp()}] Connected!")
 
                 # Capture context
                 context = self.capture_context(question, use_screen)
                 # Include the running conversation history so follow-ups have memory
                 context['history'] = list(self.history)
+                # Include any pinned context the user has set in the overlay
+                try:
+                    pinned = self.overlay.get_pin() if self.overlay else ''
+                except Exception:
+                    pinned = ''
+                if pinned:
+                    context['pinned_context'] = pinned
 
                 # Build request
                 request = {
@@ -464,7 +505,14 @@ def main():
 
     # If we're running as a bundled app or the server isn't already up,
     # spawn it ourselves so the user gets a single-launch experience.
-    if not args.server_ip or args.server_ip in ('localhost', '127.0.0.1'):
+    # Skip when pointed at a remote host — a typo there shouldn't silently
+    # spin up a local fallback that pretends to be the remote server.
+    remote_url = os.getenv("WARDEN_SERVER_URL", "").strip()
+    is_local_target = (
+        not remote_url
+        and (not args.server_ip or args.server_ip in ('localhost', '127.0.0.1'))
+    )
+    if is_local_target:
         _ensure_server_running(port=args.port)
 
     # Create agent
