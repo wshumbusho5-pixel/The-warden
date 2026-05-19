@@ -1,0 +1,7 @@
+# Drop this at /etc/caddy/Caddyfile on the server, then:
+#   systemctl reload caddy
+# Caddy auto-detects WebSocket upgrades and grabs Let's Encrypt certs.
+
+warden.example.com {
+    reverse_proxy localhost:8765
+}

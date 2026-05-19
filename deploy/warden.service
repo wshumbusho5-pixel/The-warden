@@ -1,0 +1,21 @@
+# Install at /etc/systemd/system/warden.service, then:
+#   systemctl daemon-reload
+#   systemctl enable --now warden
+#
+# Assumes a 'warden' user with the repo cloned at /home/warden/warden
+# and a venv at /home/warden/warden/venv.
+
+[Unit]
+Description=Warden AI server
+After=network.target
+
+[Service]
+User=warden
+WorkingDirectory=/home/warden/warden
+EnvironmentFile=/home/warden/warden/.env
+ExecStart=/home/warden/warden/venv/bin/python server/main_server.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

@@ -1,16 +1,29 @@
 """
-Transparent overlay window for displaying AI responses
+Transparent overlay window for displaying AI responses.
+
+Cross-platform: macOS uses NSWindow APIs for screen-capture exclusion + Spaces
+behavior. Windows uses SetWindowDisplayAffinity for the same "invisible in
+screen shares" effect. Linux has no equivalent — the overlay is visible to
+capture there.
 """
 
+import sys
 import tkinter as tk
 from tkinter import scrolledtext
 import threading
 
 
+_IS_MAC = sys.platform == 'darwin'
+_IS_WIN = sys.platform.startswith('win')
+
+
 def _set_accessory_activation_policy():
-    """Make the Python process a macOS 'accessory' app — no Dock icon,
-    behaves like a menu-bar utility. Accessory apps' windows can appear
-    over fullscreen apps and on every Space more reliably than regular apps."""
+    """macOS-only: make the Python process an 'accessory' app — no Dock icon,
+    behaves like a menu-bar utility. Accessory apps' windows can appear over
+    fullscreen apps and on every Space more reliably than regular apps.
+    No-op on Windows/Linux (they don't have this concept)."""
+    if not _IS_MAC:
+        return
     try:
         from Cocoa import NSApp
         NSApplicationActivationPolicyAccessory = 1
@@ -19,10 +32,52 @@ def _set_accessory_activation_policy():
         print(f"[WARN] Could not set accessory activation policy: {e}")
 
 
+def _exclude_from_screen_capture_windows(tk_window):
+    """Windows: SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) makes the
+    window appear blank in screen recordings / shares while staying visible
+    to the user. Needs Windows 10 2004+; falls back to WDA_MONITOR on older."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+        user32.SetWindowDisplayAffinity.restype = wintypes.BOOL
+        user32.GetParent.argtypes = [wintypes.HWND]
+        user32.GetParent.restype = wintypes.HWND
+
+        tk_window.update_idletasks()
+        # Tk's winfo_id() returns the inner widget HWND; the decorated
+        # top-level is its parent. SetWindowDisplayAffinity wants the top-level.
+        hwnd = tk_window.winfo_id()
+        parent = user32.GetParent(hwnd)
+        if parent:
+            hwnd = parent
+
+        WDA_EXCLUDEFROMCAPTURE = 0x00000011  # Windows 10 2004+
+        if user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE):
+            print("[INFO] Overlay configured: excluded from screen capture (WDA_EXCLUDEFROMCAPTURE)")
+            return True
+
+        WDA_MONITOR = 0x00000001  # older fallback — also blanks in captures
+        if user32.SetWindowDisplayAffinity(hwnd, WDA_MONITOR):
+            print("[INFO] Overlay configured: excluded from screen capture (WDA_MONITOR fallback)")
+            return True
+
+        print("[WARN] SetWindowDisplayAffinity failed; overlay visible to screen capture")
+        return False
+    except Exception as e:
+        print(f"[WARN] Windows screen-capture exclusion not available: {e}")
+        return False
+
+
 def _exclude_from_screen_capture(tk_window):
-    """Mark a Tk window's underlying NSWindow as excluded from macOS screen
-    recording / sharing (NSWindowSharingNone). Visible to the user, blank in
-    Zoom/Meet/Teams/QuickTime captures."""
+    """Hide the overlay from screen capture using the platform's native API.
+    Returns truthy on success. On Linux there's no portable equivalent."""
+    if _IS_WIN:
+        return _exclude_from_screen_capture_windows(tk_window)
+    if not _IS_MAC:
+        # No portable equivalent on Linux/X11. Overlay will appear in captures.
+        return False
     try:
         from Cocoa import NSApp
     except ImportError:
@@ -69,9 +124,55 @@ def _exclude_from_screen_capture(tk_window):
     return None
 
 
+def _active_screen_top_right_windows(window_w, window_h, margin=20, top_margin=60):
+    """Windows multi-monitor: top-right of whichever monitor the cursor is on,
+    using the work area (excludes the taskbar)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+
+        class POINT(ctypes.Structure):
+            _fields_ = [('x', wintypes.LONG), ('y', wintypes.LONG)]
+
+        class RECT(ctypes.Structure):
+            _fields_ = [('left', wintypes.LONG), ('top', wintypes.LONG),
+                        ('right', wintypes.LONG), ('bottom', wintypes.LONG)]
+
+        class MONITORINFO(ctypes.Structure):
+            _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', RECT),
+                        ('rcWork', RECT), ('dwFlags', wintypes.DWORD)]
+
+        user32.GetCursorPos.argtypes = [ctypes.POINTER(POINT)]
+        user32.GetCursorPos.restype = wintypes.BOOL
+        user32.MonitorFromPoint.argtypes = [POINT, wintypes.DWORD]
+        user32.MonitorFromPoint.restype = wintypes.HANDLE
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MONITORINFO)]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+
+        pt = POINT()
+        if not user32.GetCursorPos(ctypes.byref(pt)):
+            return None
+        MONITOR_DEFAULTTONEAREST = 2
+        hmon = user32.MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST)
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if not user32.GetMonitorInfoW(hmon, ctypes.byref(info)):
+            return None
+        rc = info.rcWork
+        return (int(rc.right - window_w - margin), int(rc.top + top_margin))
+    except Exception as e:
+        print(f"[WARN] Windows multi-monitor lookup failed: {e}")
+        return None
+
+
 def _active_screen_top_right(window_w, window_h, margin=20, top_margin=60):
     """Return (x, y) in Tk geometry coords for the top-right of whichever
     screen the mouse cursor is on. Falls back to primary screen on failure."""
+    if _IS_WIN:
+        return _active_screen_top_right_windows(window_w, window_h, margin, top_margin)
+    if not _IS_MAC:
+        return None  # Linux: caller falls back to Tk's primary-screen geometry
     try:
         from Cocoa import NSScreen, NSEvent
     except ImportError:
@@ -418,7 +519,15 @@ class ResponseOverlay:
     @staticmethod
     def _pin_storage_path():
         import os
-        base = os.path.expanduser('~/Library/Application Support/TextKit')
+        if _IS_MAC:
+            base = os.path.expanduser('~/Library/Application Support/TextKit')
+        elif _IS_WIN:
+            base = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'TextKit')
+        else:
+            base = os.path.join(
+                os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config')),
+                'textkit',
+            )
         try:
             os.makedirs(base, exist_ok=True)
         except Exception:

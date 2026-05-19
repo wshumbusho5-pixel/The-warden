@@ -31,7 +31,16 @@ except Exception:
 
 try:
     import pytesseract
-    for _candidate in ('/opt/homebrew/bin/tesseract', '/usr/local/bin/tesseract'):
+    # Check well-known install paths per platform. On Windows the default
+    # installer doesn't add Tesseract to PATH, so we have to point pytesseract
+    # at it explicitly. On macOS/Linux these are the common Homebrew/apt paths.
+    for _candidate in (
+        '/opt/homebrew/bin/tesseract',                                 # macOS Apple Silicon
+        '/usr/local/bin/tesseract',                                    # macOS Intel / Linux
+        '/usr/bin/tesseract',                                          # Linux (apt)
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',               # Windows default
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',         # Windows 32-bit
+    ):
         if os.path.isfile(_candidate):
             pytesseract.pytesseract.tesseract_cmd = _candidate
             break
