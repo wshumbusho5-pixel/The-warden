@@ -13,6 +13,25 @@ permissions:
   contents: write  # needed by softprops/action-gh-release on tag pushes
 
 jobs:
+  # Validates the riskiest new Windows code (Windows.Media.Ocr) automatically.
+  # OCR needs no window or human, so it runs headless on a Windows runner.
+  smoketest-windows-ocr:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: WinRT OCR smoke test
+        run: python client/ocr_smoketest.py
+
   build-mac:
     runs-on: macos-latest
     steps:
