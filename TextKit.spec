@@ -1,26 +1,43 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec for TextKit.app — bundles client + server into one launchable .app
+# PyInstaller spec for TextKit. Cross-platform: produces TextKit.app on macOS,
+# dist/TextKit/TextKit.exe on Windows. PyInstaller can't cross-build, so the
+# Mac bundle has to be built on a Mac and the Windows exe on a Windows box
+# (or in a GitHub Actions windows-latest runner).
 import os
+import sys
 
 PROJECT_ROOT = os.path.abspath(os.getcwd())
 
-# Bundle the server source + configs as data so the client can spawn it
+IS_MAC = sys.platform == 'darwin'
+IS_WIN = sys.platform.startswith('win')
+
+# .env is intentionally NOT bundled — the invite-code first-run dialog lets
+# friends configure their own credentials per machine, so the binary stays
+# shareable without leaking the host's tokens.
 datas = [
     (os.path.join(PROJECT_ROOT, 'server'), 'server'),
     (os.path.join(PROJECT_ROOT, 'client', 'config.yaml'), 'client'),
-    (os.path.join(PROJECT_ROOT, '.env'), '.'),
 ]
 
-hiddenimports = [
-    'pynput.keyboard._darwin',
-    'pynput.mouse._darwin',
-    'Cocoa',
-    'Quartz',
-    'AppKit',
-    'objc',
-    'PIL',
-    'PIL._tkinter_finder',
-]
+# Common hidden imports the static analyzer can miss
+hiddenimports = ['PIL', 'PIL._tkinter_finder']
+
+if IS_MAC:
+    hiddenimports += [
+        'pynput.keyboard._darwin',
+        'pynput.mouse._darwin',
+        'Cocoa', 'Quartz', 'AppKit', 'objc',
+    ]
+elif IS_WIN:
+    hiddenimports += [
+        'pynput.keyboard._win32',
+        'pynput.mouse._win32',
+        # Windows.Media.Ocr via Microsoft's pywinrt projection
+        'winrt.windows.media.ocr',
+        'winrt.windows.graphics.imaging',
+        'winrt.windows.storage.streams',
+        'winrt.windows.security.cryptography',
+    ]
 
 a = Analysis(
     [os.path.join(PROJECT_ROOT, 'client', 'main.py')],
@@ -50,7 +67,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,
+    console=False,  # GUI app — no terminal window on either platform
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -68,18 +85,22 @@ coll = COLLECT(
     name='TextKit',
 )
 
-app = BUNDLE(
-    coll,
-    name='TextKit.app',
-    icon=None,
-    bundle_identifier='com.textkit.assistant',
-    info_plist={
-        'CFBundleName': 'TextKit',
-        'CFBundleDisplayName': 'TextKit',
-        'CFBundleVersion': '1.0.0',
-        'CFBundleShortVersionString': '1.0',
-        'LSUIElement': True,  # accessory app — no Dock icon
-        'NSHighResolutionCapable': True,
-        'NSAppleEventsUsageDescription': 'TextKit needs accessibility access for the global hotkey.',
-    },
-)
+# Mac-only: wrap the collected output in an .app bundle so it behaves like
+# a real macOS application. Windows just uses the COLLECT folder directly —
+# dist/TextKit/TextKit.exe is what gets distributed (zip it for sharing).
+if IS_MAC:
+    app = BUNDLE(
+        coll,
+        name='TextKit.app',
+        icon=None,
+        bundle_identifier='com.textkit.assistant',
+        info_plist={
+            'CFBundleName': 'TextKit',
+            'CFBundleDisplayName': 'TextKit',
+            'CFBundleVersion': '1.0.0',
+            'CFBundleShortVersionString': '1.0',
+            'LSUIElement': True,  # accessory app — no Dock icon
+            'NSHighResolutionCapable': True,
+            'NSAppleEventsUsageDescription': 'TextKit needs accessibility access for the global hotkey.',
+        },
+    )

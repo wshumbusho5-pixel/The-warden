@@ -107,6 +107,124 @@ else:
     load_dotenv()
 
 
+def _prompt_for_invite_code():
+    """Modal first-run dialog asking for an invite code.
+
+    Returns the entered string, or None if the user dismissed without pasting.
+    Lives in its own Tk root that we destroy before the main app starts —
+    the agent will spin up its own root afterwards.
+    """
+    import tkinter as tk
+
+    state = {'code': None}
+    win = tk.Tk()
+    win.title("Welcome to TextKit")
+    win.geometry("540x270")
+    win.resizable(False, False)
+    win.configure(bg='#1e1e1e')
+
+    tk.Label(
+        win, text="Paste your invite code",
+        font=('Arial', 14, 'bold'),
+        bg='#1e1e1e', fg='#ffffff',
+    ).pack(pady=(24, 6))
+    tk.Label(
+        win,
+        text="Someone shared TextKit with you. Paste the code they sent — "
+             "it starts with 'warden:'.",
+        font=('Arial', 10),
+        bg='#1e1e1e', fg='#888888',
+        wraplength=480, justify='center',
+    ).pack(pady=(0, 12))
+
+    entry = tk.Entry(
+        win, font=('Courier', 11),
+        bg='#2d2d2d', fg='#ffffff', insertbackground='white',
+        relief=tk.FLAT,
+    )
+    entry.pack(padx=24, ipady=6, fill=tk.X)
+    entry.focus_set()
+
+    error_label = tk.Label(
+        win, text="", font=('Arial', 9),
+        bg='#1e1e1e', fg='#ff6b6b',
+    )
+    error_label.pack(pady=(8, 0))
+
+    def submit():
+        code = entry.get().strip()
+        if not code:
+            error_label.configure(text="Paste your invite code, then press Continue.")
+            return
+        state['code'] = code
+        win.destroy()
+
+    def cancel():
+        win.destroy()
+
+    btn_frame = tk.Frame(win, bg='#1e1e1e')
+    btn_frame.pack(pady=14)
+    tk.Button(
+        btn_frame, text="Continue", command=submit,
+        bg='#0a84ff', fg='#ffffff', font=('Arial', 10, 'bold'),
+        relief=tk.FLAT, padx=24, pady=8, cursor='hand2',
+    ).pack(side=tk.LEFT, padx=6)
+    tk.Button(
+        btn_frame, text="Quit", command=cancel,
+        bg='#404040', fg='#ffffff', font=('Arial', 10),
+        relief=tk.FLAT, padx=20, pady=8, cursor='hand2',
+    ).pack(side=tk.LEFT, padx=6)
+
+    win.bind('<Return>', lambda e: submit())
+    win.bind('<Escape>', lambda e: cancel())
+    win.mainloop()
+
+    return state['code']
+
+
+def _resolve_remote_config():
+    """Make sure WARDEN_SERVER_URL is populated in os.environ before the
+    agent constructs. Resolution order:
+
+      1. Already set in env (.env, shell, LaunchAgent) → leave alone.
+      2. MAIN_COMPUTER_IP set → legacy LAN mode, also leave alone.
+      3. Saved invite code on disk → load + populate env.
+      4. Neither → show the first-run dialog, save what the user pastes.
+
+    Returns False only if the user dismissed the dialog without pasting.
+    """
+    if os.getenv("WARDEN_SERVER_URL", "").strip():
+        return True
+    if os.getenv("MAIN_COMPUTER_IP", "").strip():
+        return True
+
+    from invite import decode_invite, load_saved_config, save_config, config_path
+
+    saved = load_saved_config()
+    if saved is not None:
+        url, token = saved
+        os.environ["WARDEN_SERVER_URL"] = url
+        if token:
+            os.environ["WARDEN_AUTH_TOKEN"] = token
+        return True
+
+    while True:
+        code = _prompt_for_invite_code()
+        if not code:
+            return False
+        try:
+            url, token = decode_invite(code)
+        except ValueError as e:
+            print(f"[INFO] invalid invite code ({e}); prompting again")
+            continue
+        save_config(url, token)
+        os.environ["WARDEN_SERVER_URL"] = url
+        if token:
+            os.environ["WARDEN_AUTH_TOKEN"] = token
+        print(f"[INFO] Saved config to {config_path()}")
+        return True
+
+
 class InvisibleAgentPro:
     """
     Enhanced Invisible Agent with full features:
@@ -487,8 +605,25 @@ def main():
                         help='Run mode (default: background)')
     parser.add_argument('--port', type=int, default=8765,
                         help='Server port (default: 8765)')
+    parser.add_argument('--reset-config', action='store_true',
+                        help='Forget the saved invite code and prompt again on next launch')
 
     args = parser.parse_args()
+
+    if args.reset_config:
+        from invite import config_path
+        try:
+            os.remove(config_path())
+            print(f"[INFO] Removed saved config at {config_path()}")
+        except FileNotFoundError:
+            pass
+
+    # Resolve remote config (env → saved invite → first-run dialog) BEFORE
+    # constructing the agent, so the existing env-var-driven code paths
+    # downstream see a fully populated environment.
+    if not _resolve_remote_config():
+        print("[INFO] No config provided; exiting.")
+        return
 
     # Single-instance guard: if another TextKit is already listening on the
     # port, don't start a second one — they'd fight for the keyboard hook.
