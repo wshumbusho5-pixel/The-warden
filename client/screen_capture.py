@@ -1,18 +1,22 @@
 """
-Screen capture and OCR functionality
+Screen capture and OCR functionality.
+
+OCR resolution order: native OS API first (Vision on macOS,
+Windows.Media.Ocr on Windows), then Tesseract as a portable fallback.
+Native APIs ship with the OS, so a packaged client doesn't need Tesseract
+installed separately — that's only for Linux or stripped-down boxes.
 """
 
 import io
 import os
+import sys
 from datetime import datetime
 
 import pyautogui
 from PIL import Image, ImageGrab
 
 
-# Try to use Apple's Vision framework first (better accuracy, ships with
-# macOS, no external binary). Fall back to Tesseract via pytesseract on
-# error or non-macOS systems.
+# macOS: Vision framework. Ships with the OS, no external binary.
 _VISION_AVAILABLE = False
 try:
     from Vision import (
@@ -28,6 +32,17 @@ try:
     _VISION_AVAILABLE = True
 except Exception:
     _VISION_AVAILABLE = False
+
+
+# Windows: Windows.Media.Ocr via Microsoft's pywinrt projection.
+# Equivalent role to Vision on macOS — ships with Windows 10+, no extra binary.
+_WINRT_AVAILABLE = False
+if sys.platform.startswith('win'):
+    try:
+        import winrt.windows.media.ocr  # noqa: F401
+        _WINRT_AVAILABLE = True
+    except Exception:
+        _WINRT_AVAILABLE = False
 
 try:
     import pytesseract
@@ -78,6 +93,62 @@ def _ocr_with_vision(pil_image):
         if candidates:
             lines.append(candidates[0].string())
     return "\n".join(lines)
+
+
+async def _winrt_ocr_async(pil_image):
+    """Run a single OCR request via Windows.Media.Ocr. Internal — called from
+    a worker thread by _ocr_with_winrt to avoid clashing with the client's
+    own asyncio loop on the main thread."""
+    from winrt.windows.graphics.imaging import BitmapDecoder
+    from winrt.windows.media.ocr import OcrEngine
+    from winrt.windows.security.cryptography import CryptographicBuffer
+    from winrt.windows.storage.streams import InMemoryRandomAccessStream
+
+    buf = io.BytesIO()
+    pil_image.save(buf, format='PNG')
+    png_bytes = buf.getvalue()
+
+    stream = InMemoryRandomAccessStream()
+    ibuffer = CryptographicBuffer.create_from_byte_array(png_bytes)
+    await stream.write_async(ibuffer)
+    stream.seek(0)
+
+    decoder = await BitmapDecoder.create_async(stream)
+    bitmap = await decoder.get_software_bitmap_async()
+
+    engine = OcrEngine.try_create_from_user_profile_languages()
+    if engine is None:
+        # No OCR language pack installed for the user's locale. Fall through
+        # to the caller's Tesseract path.
+        return ""
+    ocr_result = await engine.recognize_async(bitmap)
+    return "\n".join(line.text for line in ocr_result.lines)
+
+
+def _ocr_with_winrt(pil_image):
+    """Sync wrapper. WinRT OCR is async, but the OCR call sites are sync and
+    sometimes nested inside the client's asyncio loop, so we run on a fresh
+    worker thread with its own loop to keep them isolated."""
+    if not _WINRT_AVAILABLE:
+        return ""
+    import asyncio
+    import threading
+
+    result = [""]
+    error = [None]
+
+    def run():
+        try:
+            result[0] = asyncio.run(_winrt_ocr_async(pil_image))
+        except Exception as e:
+            error[0] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join()
+    if error[0] is not None:
+        print(f"[WARN] WinRT OCR failed: {error[0]}")
+    return result[0]
 
 
 def _ocr_with_tesseract(pil_image):
@@ -131,8 +202,8 @@ class ScreenCapture:
         return self.capture_screen()
 
     def extract_text_from_image(self, image):
-        """Extract text from image using OCR. Prefers Vision (macOS),
-        falls back to Tesseract."""
+        """Extract text from image. Try the OS's native OCR first (Vision on
+        macOS, Windows.Media.Ocr on Windows), Tesseract as last-resort fallback."""
         if image is None:
             return ""
         text = ""
@@ -141,6 +212,11 @@ class ScreenCapture:
                 text = _ocr_with_vision(image)
             except Exception as e:
                 print(f"[WARN] Vision OCR failed: {e}; falling back to Tesseract")
+        elif _WINRT_AVAILABLE:
+            try:
+                text = _ocr_with_winrt(image)
+            except Exception as e:
+                print(f"[WARN] WinRT OCR failed: {e}; falling back to Tesseract")
         if not text:
             text = _ocr_with_tesseract(image)
         self.last_text = text
