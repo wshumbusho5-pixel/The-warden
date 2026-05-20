@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 from server_display import ServerDisplay
 from ai_providers import AIProviderFactory
+from token_store import TokenStore
 
 # Load environment variables
 load_dotenv()
@@ -52,9 +53,18 @@ class InvisibleAIServer:
 
         self.connected_clients = set()
 
-        # Bearer token required on the WS handshake. If unset, auth is disabled
-        # — fine for localhost-only, NOT safe to expose publicly.
+        # Master bearer token for the owner. Always accepted, never metered.
+        # Friends use per-user tokens from the token store instead. If neither
+        # a master token nor any stored tokens exist, auth is disabled — fine
+        # for localhost-only, NOT safe to expose publicly.
         self.auth_token = os.getenv('WARDEN_AUTH_TOKEN', '').strip()
+
+        # Per-user tokens (mint/revoke/usage caps + Stripe subscription state).
+        db_path = os.getenv(
+            'WARDEN_DB_PATH',
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'warden.db'),
+        )
+        self.token_store = TokenStore(db_path)
 
         # Initialize server display. Tk requires its window be created on the
         # main thread on macOS, so we build it here (main() runs us on the main
@@ -68,10 +78,13 @@ class InvisibleAIServer:
         print(f"[{self._timestamp()}] AI Provider: {self.ai_provider.name}")
         if hasattr(self.ai_provider, 'model'):
             print(f"[{self._timestamp()}] Model: {self.ai_provider.model}")
-        if self.auth_token:
-            print(f"[{self._timestamp()}] Auth: ENABLED (bearer token required)")
+        if self.auth_token or self.token_store.has_tokens():
+            n = len(self.token_store.list_all())
+            print(f"[{self._timestamp()}] Auth: ENABLED "
+                  f"(master token: {'yes' if self.auth_token else 'no'}, "
+                  f"{n} per-user token(s))")
         else:
-            print(f"[{self._timestamp()}] Auth: DISABLED — set WARDEN_AUTH_TOKEN to require a token")
+            print(f"[{self._timestamp()}] Auth: DISABLED — no master token and no stored tokens")
 
     def _timestamp(self):
         """Generate timestamp for logging"""
@@ -115,20 +128,37 @@ class InvisibleAIServer:
         """Handle incoming client connections"""
         client_id = id(websocket)
 
-        # Enforce bearer token on the handshake if configured.
-        if self.auth_token:
+        # Pull the bearer token off the handshake.
+        provided = ''
+        try:
+            auth_header = websocket.request.headers.get('Authorization', '') or ''
+            if auth_header.startswith('Bearer '):
+                provided = auth_header[len('Bearer '):].strip()
+        except Exception:
             provided = ''
-            try:
-                auth_header = websocket.request.headers.get('Authorization', '') or ''
-                if auth_header.startswith('Bearer '):
-                    provided = auth_header[len('Bearer '):].strip()
-            except Exception:
-                provided = ''
-            if not hmac.compare_digest(provided, self.auth_token):
+
+        # Authorize. Master token (owner) is accepted and not metered. Otherwise
+        # the token must be a valid per-user token, which we then meter. With no
+        # token, allow only when auth is fully disabled (localhost dev).
+        auth_required = bool(self.auth_token) or self.token_store.has_tokens()
+        metered_token = None  # set when a per-user token is in play
+        master_ok = bool(self.auth_token) and hmac.compare_digest(provided, self.auth_token)
+
+        if master_ok:
+            pass  # owner — full access, no metering
+        elif provided:
+            ok, reason = self.token_store.validate(provided)
+            if not ok:
                 peer = getattr(websocket, 'remote_address', '?')
-                print(f"[{self._timestamp()}] Rejected unauthenticated connection from {peer}")
-                await websocket.close(code=4401, reason='unauthorized')
+                print(f"[{self._timestamp()}] Rejected token from {peer}: {reason}")
+                await websocket.close(code=4401, reason=reason)
                 return
+            metered_token = provided
+        elif auth_required:
+            peer = getattr(websocket, 'remote_address', '?')
+            print(f"[{self._timestamp()}] Rejected unauthenticated connection from {peer}")
+            await websocket.close(code=4401, reason='unauthorized')
+            return
 
         # Register client
         self.connected_clients.add(websocket)
@@ -137,12 +167,28 @@ class InvisibleAIServer:
         try:
             async for message in websocket:
                 try:
+                    # Re-check per-user tokens each request so a revocation or a
+                    # blown usage cap takes effect mid-session, not just at connect.
+                    if metered_token is not None:
+                        ok, reason = self.token_store.validate(metered_token)
+                        if not ok:
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'content': f'Access paused: {reason}.',
+                                'timestamp': self._timestamp(),
+                            }))
+                            continue
+
                     # Parse request
                     data = json.loads(message)
                     print(f"[{self._timestamp()}] Received request from client {client_id}")
 
                     # Process and get AI response
                     response = await self.process_request(data, client_id)
+
+                    # Meter a successful exchange against the per-user token.
+                    if metered_token is not None and response.get('type') == 'response':
+                        self.token_store.record_usage(metered_token)
 
                     # Send back to client
                     await websocket.send(json.dumps(response))

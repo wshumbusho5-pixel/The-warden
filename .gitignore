@@ -28,6 +28,12 @@ wheels/
 .env.local
 .env.*.local
 
+# Token database (per-user tokens, usage, Stripe state) — never commit
+warden.db
+warden.db-wal
+warden.db-shm
+*.db
+
 # Logs
 logs/
 *.log
