@@ -13,6 +13,9 @@ After=network.target
 User=warden
 WorkingDirectory=/home/warden/warden
 EnvironmentFile=/home/warden/warden/.env
+# Flush stdout immediately so the server's logs reach the journal in real time
+# (Python block-buffers stdout when it isn't a TTY, e.g. under systemd).
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/warden/warden/venv/bin/python server/main_server.py
 Restart=on-failure
 RestartSec=3
