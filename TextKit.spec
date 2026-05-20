@@ -33,6 +33,8 @@ elif IS_WIN:
         'pynput.keyboard._win32',
         'pynput.mouse._win32',
         # Windows.Media.Ocr via Microsoft's pywinrt projection
+        'winrt.windows.foundation',
+        'winrt.windows.foundation.collections',
         'winrt.windows.media.ocr',
         'winrt.windows.graphics.imaging',
         'winrt.windows.storage.streams',

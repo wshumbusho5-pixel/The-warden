@@ -14,6 +14,10 @@ pyperclip>=1.8.2
 # Windows-only: native OCR via Windows.Media.Ocr. Mirrors the role of
 # Vision on macOS — ships with Windows 10+, no separate Tesseract install
 # needed. sys_platform marker keeps these off macOS/Linux installs.
+# Foundation (+ Collections) provides the IAsyncOperation/await machinery the
+# async OCR calls depend on — without it, `await ...` raises ModuleNotFound.
+winrt-Windows.Foundation>=2.0; sys_platform == "win32"
+winrt-Windows.Foundation.Collections>=2.0; sys_platform == "win32"
 winrt-Windows.Media.Ocr>=2.0; sys_platform == "win32"
 winrt-Windows.Graphics.Imaging>=2.0; sys_platform == "win32"
 winrt-Windows.Storage.Streams>=2.0; sys_platform == "win32"
