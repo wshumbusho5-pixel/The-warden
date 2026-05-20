@@ -1,0 +1,23 @@
+# Install at /etc/systemd/system/warden-billing.service, then:
+#   systemctl daemon-reload
+#   systemctl enable --now warden-billing
+#
+# Runs the Stripe billing Flask app (waitress) on localhost:8766. Caddy routes
+# the billing paths here; the WebSocket server stays on 8765. Reads the same
+# /home/warden/warden/.env (needs the STRIPE_* vars set).
+
+[Unit]
+Description=Warden Stripe billing server
+After=network.target warden.service
+
+[Service]
+User=warden
+WorkingDirectory=/home/warden/warden
+EnvironmentFile=/home/warden/warden/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/warden/warden/venv/bin/python server/billing_server.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

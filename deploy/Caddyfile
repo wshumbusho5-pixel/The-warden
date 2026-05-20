@@ -1,7 +1,17 @@
 # Drop this at /etc/caddy/Caddyfile on the server, then:
 #   systemctl reload caddy
 # Caddy auto-detects WebSocket upgrades and grabs Let's Encrypt certs.
+#
+# Billing paths (/join, /success, Stripe /webhook, checkout) go to the Flask
+# billing service on :8766; everything else — notably the WebSocket upgrade
+# at / — goes to the WS server on :8765.
 
 warden.example.com {
-    reverse_proxy localhost:8765
+    @billing path /join /create-checkout-session /success /webhook
+    handle @billing {
+        reverse_proxy localhost:8766
+    }
+    handle {
+        reverse_proxy localhost:8765
+    }
 }
