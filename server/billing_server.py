@@ -157,13 +157,12 @@ _LANDING_HTML = """<!doctype html><html><head><meta charset="utf-8">
   months, but if something isn't working, email us and we'll make it right.</p>
 
   <h2>Contact</h2>
-  <p>Questions or support: <a href="mailto:wshumbusho5@gmail.com">wshumbusho5@gmail.com</a><br>
-  Phone: (717) 537-8893</p>
+  <p>Questions or support: <a href="mailto:admin@areliga.com">admin@areliga.com</a></p>
 
   <hr>
   <footer>
     The Warden &middot; Operated by The Warden &middot;
-    Contact: wshumbusho5@gmail.com<br>
+    Contact: admin@areliga.com<br>
     We only store your access token and subscription status. Your screen content is processed to
     answer your request and is not sold or shared.
   </footer>
