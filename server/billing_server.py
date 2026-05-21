@@ -61,6 +61,17 @@ store = TokenStore(DB_PATH)
 app = Flask(__name__)
 
 
+def _g(obj, key, default=None):
+    """Safe field read for Stripe objects. Their `.get` isn't dict.get
+    (attribute access is intercepted), but subscripting works and raises
+    KeyError for missing keys — so we catch that."""
+    try:
+        val = obj[key]
+    except (KeyError, TypeError):
+        return default
+    return default if val is None else val
+
+
 def _page(title, body):
     return Response(
         f"""<!doctype html><html><head><meta charset="utf-8">
@@ -135,10 +146,10 @@ def success():
         session = stripe.checkout.Session.retrieve(session_id)
     except Exception:
         abort(400)
-    if session.get("payment_status") != "paid":
+    if _g(session, "payment_status") != "paid":
         return _page("Processing", "<h1>Processing…</h1><p>Hang tight, finalizing your subscription.</p>")
-    email = (session.get("customer_details") or {}).get("email", "")
-    token = _mint_if_missing(session.get("customer"), session.get("subscription"), email)
+    email = _g(_g(session, "customer_details") or {}, "email", "")
+    token = _mint_if_missing(_g(session, "customer"), _g(session, "subscription"), email)
     if not token:
         return _page(
             "Almost there",
@@ -175,23 +186,23 @@ def webhook():
     obj = event["data"]["object"]
 
     if etype == "checkout.session.completed":
-        email = (obj.get("customer_details") or {}).get("email", "")
-        _mint_if_missing(obj.get("customer"), obj.get("subscription"), email)
+        email = _g(_g(obj, "customer_details") or {}, "email", "")
+        _mint_if_missing(_g(obj, "customer"), _g(obj, "subscription"), email)
 
     elif etype == "customer.subscription.deleted":
-        row = store.get_by_stripe_customer(obj.get("customer"))
+        row = store.get_by_stripe_customer(_g(obj, "customer"))
         if row:
             store.set_subscription(row["token"], "canceled")
 
     elif etype == "invoice.payment_failed":
-        row = store.get_by_stripe_customer(obj.get("customer"))
+        row = store.get_by_stripe_customer(_g(obj, "customer"))
         if row:
             store.set_subscription(row["token"], "past_due")
 
     elif etype == "customer.subscription.updated":
-        row = store.get_by_stripe_customer(obj.get("customer"))
+        row = store.get_by_stripe_customer(_g(obj, "customer"))
         if row:
-            status = obj.get("status", "")
+            status = _g(obj, "status", "")
             mapped = "active" if status in ("active", "trialing") else status
             store.set_subscription(row["token"], mapped)
 
