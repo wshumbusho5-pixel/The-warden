@@ -93,17 +93,86 @@ def _page(title, body):
     )
 
 
+_LANDING_HTML = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Warden — Your personal AI study & research assistant</title>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#1e1e1e; color:#e8e8e8; margin:0;
+         font-family:-apple-system,Segoe UI,Arial,sans-serif; line-height:1.6; }
+  .wrap { max-width:720px; margin:0 auto; padding:48px 24px 72px; }
+  header { display:flex; align-items:center; justify-content:space-between; margin-bottom:40px; }
+  .brand { font-size:20px; font-weight:700; }
+  h1 { font-size:34px; line-height:1.2; margin:0 0 14px; }
+  h2 { font-size:20px; margin:36px 0 10px; }
+  p { color:#bdbdbd; }
+  .sub { color:#9a9a9a; font-size:17px; }
+  .price { font-size:40px; font-weight:700; margin:6px 0 2px; }
+  .price small { font-size:16px; color:#9a9a9a; font-weight:400; }
+  ul { color:#bdbdbd; padding-left:20px; }
+  li { margin:6px 0; }
+  .btn { display:inline-block; background:#0a84ff; color:#fff; border:0; border-radius:10px;
+         padding:15px 34px; font-size:17px; font-weight:600; cursor:pointer; margin-top:18px; }
+  .card { background:#262626; border:1px solid #333; border-radius:12px; padding:24px; margin-top:18px; }
+  hr { border:0; border-top:1px solid #333; margin:40px 0; }
+  a { color:#5aa9ff; }
+  footer { color:#7a7a7a; font-size:13px; margin-top:48px; }
+</style></head>
+<body><div class="wrap">
+  <header><div class="brand">The Warden</div></header>
+
+  <h1>Your personal AI study &amp; research assistant</h1>
+  <p class="sub">The Warden lives in a small overlay on your desktop. Press a shortcut and it reads
+  whatever's on your screen — a problem set, a document, a webpage — and helps you understand it,
+  summarize it, or work through it. It remembers context as you move between tabs, so the
+  conversation stays continuous with what you're looking at.</p>
+
+  <div class="card">
+    <div class="price">$100 <small>/ month</small></div>
+    <p style="margin:4px 0 0">Billed monthly. Cancel anytime.</p>
+    <form action="/create-checkout-session" method="POST">
+      <button class="btn" type="submit">Subscribe</button>
+    </form>
+  </div>
+
+  <h2>What's included</h2>
+  <ul>
+    <li>Desktop assistant for macOS and Windows</li>
+    <li>Screen-aware answers — explanations, summaries, step-by-step help</li>
+    <li>Continuous context across your tabs and apps</li>
+    <li>A discreet overlay that stays out of your screen recordings, so it doesn't clutter shared screens</li>
+    <li>Up to 3,500 requests per month</li>
+  </ul>
+
+  <h2>How it works</h2>
+  <ul>
+    <li>Subscribe below and you'll instantly receive a personal access code</li>
+    <li>Download the app and paste your code on first launch</li>
+    <li>Press the shortcut anytime to ask about what's on your screen</li>
+  </ul>
+
+  <h2>Billing &amp; cancellation</h2>
+  <p>Subscriptions are $100/month and renew automatically until cancelled. You can cancel anytime —
+  your access continues through the end of the current billing period. We don't prorate partial
+  months, but if something isn't working, email us and we'll make it right.</p>
+
+  <h2>Contact</h2>
+  <p>Questions or support: <a href="mailto:wshumbusho5@gmail.com">wshumbusho5@gmail.com</a><br>
+  Phone: (717) 537-8893</p>
+
+  <hr>
+  <footer>
+    The Warden &middot; Operated by The Warden &middot;
+    Contact: wshumbusho5@gmail.com<br>
+    We only store your access token and subscription status. Your screen content is processed to
+    answer your request and is not sold or shared.
+  </footer>
+</div></body></html>"""
+
+
 @app.get("/join")
 def join():
-    return _page(
-        "Join The Warden",
-        """<h1>The Warden</h1>
-        <p>Your always-on AI that sees your screen across every tab — invisible in screen shares.
-        Subscribe to get your personal access code.</p>
-        <form action="/create-checkout-session" method="POST">
-          <button class="btn" type="submit">Subscribe</button>
-        </form>""",
-    )
+    return Response(_LANDING_HTML, mimetype="text/html")
 
 
 @app.post("/create-checkout-session")
