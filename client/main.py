@@ -594,9 +594,53 @@ class InvisibleAgentPro:
                 print(f"[{self._timestamp()}] Error: {e}")
 
 
+def _setup_file_logging():
+    """Tee stdout/stderr to a per-launch log file. The bundled app is
+    windowed (no console), so without this every print() vanishes and
+    crashes are invisible. Best-effort — never blocks startup."""
+    try:
+        if sys.platform == 'darwin':
+            base = os.path.expanduser('~/Library/Logs/TextKit')
+        elif sys.platform.startswith('win'):
+            base = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'TextKit')
+        else:
+            base = os.path.join(os.path.expanduser('~/.local/state'), 'textkit')
+        os.makedirs(base, exist_ok=True)
+        log_path = os.path.join(base, 'client.log')
+        logf = open(log_path, 'w', buffering=1, encoding='utf-8')
+
+        class _Tee:
+            def __init__(self, *streams):
+                self._streams = [s for s in streams if s is not None]
+
+            def write(self, data):
+                for s in self._streams:
+                    try:
+                        s.write(data)
+                    except Exception:
+                        pass
+                return len(data)
+
+            def flush(self):
+                for s in self._streams:
+                    try:
+                        s.flush()
+                    except Exception:
+                        pass
+
+        sys.stdout = _Tee(sys.__stdout__, logf)
+        sys.stderr = _Tee(sys.__stderr__, logf)
+        print(f"[INFO] TextKit log: {log_path}")
+        return log_path
+    except Exception:
+        return None
+
+
 def main():
     """Main entry point"""
     import argparse
+
+    _setup_file_logging()
 
     parser = argparse.ArgumentParser(description='Invisible AI Assistant Client')
     parser.add_argument('server_ip', nargs='?', help='Server IP address (optional)')
@@ -651,13 +695,19 @@ def main():
         _ensure_server_running(port=args.port)
 
     # Create agent
-    agent = InvisibleAgentPro(server_ip=args.server_ip, server_port=args.port)
+    try:
+        agent = InvisibleAgentPro(server_ip=args.server_ip, server_port=args.port)
 
-    # Run in selected mode
-    if args.mode == 'background':
-        agent.start_background_mode()
-    else:
-        asyncio.run(agent.interactive_mode())
+        # Run in selected mode
+        if args.mode == 'background':
+            agent.start_background_mode()
+        else:
+            asyncio.run(agent.interactive_mode())
+    except Exception:
+        import traceback
+        print("[FATAL] unhandled exception:")
+        traceback.print_exc()
+        raise
 
 
 if __name__ == "__main__":

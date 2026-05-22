@@ -229,9 +229,14 @@ class ResponseOverlay:
         # the NSWindow is fully realized.
         _set_accessory_activation_policy()
 
-        # Window configuration. We rely on NSWindow.setLevel_ for "always on
-        # top" rather than Tk's -topmost (which fights with our window level).
+        # Window configuration. On macOS we rely on NSWindow.setLevel_ for
+        # "always on top" (Tk's -topmost fights with our window level there).
+        # On Windows/Linux there's no NSWindow level, so use Tk's -topmost
+        # to keep the overlay above other windows — without it the overlay
+        # falls to normal z-order and gets buried when another app opens.
         self.window.attributes('-alpha', 0.95)     # Slightly transparent
+        if not _IS_MAC:
+            self.window.attributes('-topmost', True)
         self.window.resizable(True, True)
         self.window.minsize(300, 220)
 
@@ -463,6 +468,13 @@ class ResponseOverlay:
         # create_window and are sticky — re-applying on every show caused
         # PyObjC native crashes after many calls.
         self.window.lift()
+        # On Windows/Linux re-assert topmost: another app going topmost can
+        # otherwise leave our overlay stuck behind it.
+        if not _IS_MAC:
+            try:
+                self.window.attributes('-topmost', True)
+            except Exception:
+                pass
 
     def minimize(self):
         """Collapse the overlay to a tiny pill in the corner. The window
