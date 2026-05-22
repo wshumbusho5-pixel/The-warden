@@ -4,6 +4,8 @@ Supports: Claude (Anthropic), OpenAI (ChatGPT), Ollama (Local)
 """
 
 import os
+import time
+import random
 import requests
 from anthropic import Anthropic
 import openai
@@ -28,6 +30,12 @@ class AIProvider:
 class ClaudeProvider(AIProvider):
     """Anthropic Claude AI Provider"""
 
+    # HTTP statuses worth retrying: rate limit + transient server/overload.
+    # 529 is Anthropic's "Overloaded" — common during peak demand.
+    _RETRY_STATUSES = {429, 500, 502, 503, 504, 529}
+    # Up to this many attempts per model before falling back to the next.
+    _MAX_ATTEMPTS_PER_MODEL = 4
+
     def __init__(self, api_key=None, model="claude-sonnet-4-6"):
         super().__init__()
         self.name = "Claude (Anthropic)"
@@ -37,12 +45,29 @@ class ClaudeProvider(AIProvider):
         if not self.api_key:
             raise ValueError("ANTHROPIC_API_KEY not found")
 
+        # If the primary model is overloaded, fall back to a lighter model that
+        # usually has spare capacity. A Haiku answer beats a 529 error. Override
+        # the chain with WARDEN_FALLBACK_MODELS (comma-separated) if needed.
+        fallback_env = os.getenv("WARDEN_FALLBACK_MODELS", "claude-haiku-4-5-20251001")
+        self.fallback_models = [m.strip() for m in fallback_env.split(",") if m.strip()]
+
         # Bump default timeout (default ~60s can be too short on slow links).
-        self.client = Anthropic(api_key=self.api_key, timeout=120.0, max_retries=2)
+        # We do our own retry/backoff + model fallback below, so disable the
+        # SDK's internal retries to keep timing predictable.
+        self.client = Anthropic(api_key=self.api_key, timeout=120.0, max_retries=0)
 
     def is_available(self):
         """Check if Claude is available"""
         return self.api_key is not None
+
+    @classmethod
+    def _is_retryable(cls, exc):
+        """True for transient overload/rate-limit/5xx errors worth retrying."""
+        status = getattr(exc, "status_code", None)
+        if status in cls._RETRY_STATUSES:
+            return True
+        s = str(exc).lower()
+        return "overloaded" in s or "529" in s or "rate limit" in s
 
     def generate(self, prompt, max_tokens=2000, system=None, history=None, pinned_context=None):
         """Generate response using Claude.
@@ -52,53 +77,75 @@ class ClaudeProvider(AIProvider):
         `pinned_context` — persistent user-set text (their study material,
             notes, etc.). Sent as a separate cacheable system block so the
             tokens are paid for once per 5-minute window.
+
+        On transient overload (HTTP 529) we retry with exponential backoff,
+        then fall back to a lighter model — so a busy spell on Anthropic's
+        side surfaces as a slightly slower answer instead of an error.
         """
-        try:
-            messages = list(history) if history else []
-            messages.append({"role": "user", "content": prompt})
-            kwargs = dict(
-                model=self.model,
-                max_tokens=max_tokens,
-                messages=messages,
-            )
-            system_blocks = []
-            if system:
-                system_blocks.append({
-                    "type": "text",
-                    "text": system,
-                    "cache_control": {"type": "ephemeral"},
-                })
-            if pinned_context:
-                system_blocks.append({
-                    "type": "text",
-                    "text": f"Persistent context the user has pinned:\n{pinned_context}",
-                    "cache_control": {"type": "ephemeral"},
-                })
+        messages = list(history) if history else []
+        messages.append({"role": "user", "content": prompt})
+
+        system_blocks = []
+        if system:
+            system_blocks.append({
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            })
+        if pinned_context:
+            system_blocks.append({
+                "type": "text",
+                "text": f"Persistent context the user has pinned:\n{pinned_context}",
+                "cache_control": {"type": "ephemeral"},
+            })
+
+        models = [self.model] + [m for m in self.fallback_models if m != self.model]
+        last_exc = None
+
+        for model in models:
+            kwargs = dict(model=model, max_tokens=max_tokens, messages=messages)
             if system_blocks:
                 kwargs["system"] = system_blocks
-            message = self.client.messages.create(**kwargs)
 
-            usage = message.usage
-            cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
-            cache_creation = getattr(usage, 'cache_creation_input_tokens', 0) or 0
-            tokens_used = usage.input_tokens + usage.output_tokens
-            if cache_read or cache_creation:
-                print(f"[cache] read={cache_read} created={cache_creation}")
+            for attempt in range(self._MAX_ATTEMPTS_PER_MODEL):
+                try:
+                    message = self.client.messages.create(**kwargs)
 
-            return {
-                'success': True,
-                'content': message.content[0].text,
-                'model': self.model,
-                'provider': 'claude',
-                'tokens_used': tokens_used,
-            }
+                    usage = message.usage
+                    cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
+                    cache_creation = getattr(usage, 'cache_creation_input_tokens', 0) or 0
+                    tokens_used = usage.input_tokens + usage.output_tokens
+                    if cache_read or cache_creation:
+                        print(f"[cache] read={cache_read} created={cache_creation}")
+                    if model != self.model:
+                        print(f"[claude] primary overloaded — served by fallback model {model}")
 
-        except Exception as e:
-            return {
-                'success': False,
-                'error': str(e),
-                'provider': 'claude'
-            }
+                    return {
+                        'success': True,
+                        'content': message.content[0].text,
+                        'model': model,
+                        'provider': 'claude',
+                        'tokens_used': tokens_used,
+                    }
+
+                except Exception as e:
+                    last_exc = e
+                    if self._is_retryable(e) and attempt < self._MAX_ATTEMPTS_PER_MODEL - 1:
+                        delay = min(8.0, 0.8 * (2 ** attempt)) + random.uniform(0, 0.4)
+                        print(f"[claude] {model} overloaded (attempt {attempt + 1}); "
+                              f"retrying in {delay:.1f}s")
+                        time.sleep(delay)
+                        continue
+                    if self._is_retryable(e):
+                        # Out of attempts on this model — fall back to the next.
+                        print(f"[claude] {model} still overloaded after "
+                              f"{self._MAX_ATTEMPTS_PER_MODEL} attempts; trying fallback")
+                        break
+                    # A non-transient error (bad key, invalid request) — retrying
+                    # or falling back won't help, so surface it immediately.
+                    return {'success': False, 'error': str(e), 'provider': 'claude'}
+
+        return {'success': False, 'error': str(last_exc), 'provider': 'claude'}
 
 
 class OpenAIProvider(AIProvider):

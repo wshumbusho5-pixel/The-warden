@@ -261,14 +261,22 @@ class InvisibleAIServer:
         print(f"[{self._timestamp()}] Display mode: {display_mode}")
         print(f"[{self._timestamp()}] Sending request to {self.ai_provider.name}...")
 
-        # Call AI provider
+        # Call AI provider. generate() is blocking (network + retry backoff
+        # sleeps), so run it in a worker thread to keep the event loop free
+        # for other clients.
         try:
-            result = self.ai_provider.generate(
-                prompt,
-                max_tokens=2000,
-                system=system_prompt,
-                history=history,
-                pinned_context=pinned_context,
+            import functools
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                functools.partial(
+                    self.ai_provider.generate,
+                    prompt,
+                    max_tokens=2000,
+                    system=system_prompt,
+                    history=history,
+                    pinned_context=pinned_context,
+                ),
             )
 
             if result['success']:
