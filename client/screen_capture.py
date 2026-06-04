@@ -237,6 +237,44 @@ class ScreenCapture:
             return self.extract_text_from_image(screenshot)
         return ""
 
+    def capture_and_encode(self, region=None, max_long_side=1568, quality=80):
+        """Capture the screen and return a JPEG payload ready to send to
+        Anthropic's vision API.
+
+        Args:
+            region: Optional (x, y, w, h) crop.
+            max_long_side: Longest-edge cap in pixels. 1568 matches Anthropic's
+                recommended max for cost-effective vision input — anything
+                larger is downsized server-side anyway, so do it locally to
+                cut bandwidth.
+            quality: JPEG quality 0-100. 80 keeps text crisply readable on a
+                typical screen while keeping the payload under ~150KB.
+
+        Returns:
+            {'media_type': 'image/jpeg', 'data': <base64 ascii str>} or None.
+        """
+        import base64
+        screenshot = self.capture_screen(region)
+        if screenshot is None:
+            return None
+        try:
+            img = screenshot.convert("RGB")
+            w, h = img.size
+            longest = max(w, h)
+            if longest > max_long_side:
+                scale = max_long_side / float(longest)
+                img = img.resize(
+                    (int(w * scale), int(h * scale)),
+                    Image.LANCZOS,
+                )
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            data = base64.b64encode(buf.getvalue()).decode("ascii")
+            return {"media_type": "image/jpeg", "data": data}
+        except Exception as e:
+            print(f"[ERROR] capture_and_encode failed: {e}")
+            return None
+
     def get_screen_info(self):
         """Get screen resolution and basic info"""
         try:

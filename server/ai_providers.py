@@ -69,7 +69,15 @@ class ClaudeProvider(AIProvider):
         s = str(exc).lower()
         return "overloaded" in s or "529" in s or "rate limit" in s
 
-    def generate(self, prompt, max_tokens=2000, system=None, history=None, pinned_context=None):
+    def generate(
+        self,
+        prompt,
+        max_tokens=2000,
+        system=None,
+        history=None,
+        pinned_context=None,
+        image=None,
+    ):
         """Generate response using Claude.
 
         `history` — prior {role, content} dicts; new `prompt` becomes the
@@ -77,13 +85,34 @@ class ClaudeProvider(AIProvider):
         `pinned_context` — persistent user-set text (their study material,
             notes, etc.). Sent as a separate cacheable system block so the
             tokens are paid for once per 5-minute window.
+        `image` — optional dict {'media_type': 'image/jpeg', 'data': <b64>}
+            for vision input (the user's screen). When provided, the final
+            user turn is multimodal: image first, then the text prompt.
+            Without this, Claude only sees text and is blind to graphs,
+            handwritten math, diagrams, etc.
 
         On transient overload (HTTP 529) we retry with exponential backoff,
         then fall back to a lighter model — so a busy spell on Anthropic's
         side surfaces as a slightly slower answer instead of an error.
         """
         messages = list(history) if history else []
-        messages.append({"role": "user", "content": prompt})
+        if image:
+            messages.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image.get("media_type", "image/jpeg"),
+                            "data": image["data"],
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            })
+        else:
+            messages.append({"role": "user", "content": prompt})
 
         system_blocks = []
         if system:

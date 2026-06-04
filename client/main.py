@@ -296,7 +296,8 @@ class InvisibleAgentPro:
             'question': question,
             'timestamp': self._timestamp(),
             'clipboard': '',
-            'screen_text': ''
+            'screen_text': '',
+            'screen_image': None,  # populated when vision mode is on
         }
 
         try:
@@ -305,14 +306,29 @@ class InvisibleAgentPro:
             if clipboard_content:
                 context['clipboard'] = clipboard_content[:1000]  # Limit size
 
-            # Capture screen if enabled
+            # Capture screen if enabled. Default path is now vision — send the
+            # actual screen image so Claude can read graphs, equations,
+            # diagrams, layouts, etc. OCR only sees the text; vision sees
+            # everything. Falls back to OCR if image capture fails or vision
+            # is explicitly disabled via WARDEN_VISION_DISABLED.
             if use_screen:
-                print(f"[{self._timestamp()}] Capturing screen...")
-                screen_text = self.screen_capture.capture_and_extract()
-                if screen_text:
-                    # Limit to 2000 characters to avoid huge payloads
-                    context['screen_text'] = screen_text[:2000]
-                    print(f"[{self._timestamp()}] Captured {len(screen_text)} characters from screen")
+                vision_off = os.getenv('WARDEN_VISION_DISABLED', '').strip().lower() in (
+                    '1', 'true', 'yes', 'on'
+                )
+                if not vision_off:
+                    print(f"[{self._timestamp()}] Capturing screen (vision)...")
+                    payload = self.screen_capture.capture_and_encode()
+                    if payload:
+                        context['screen_image'] = payload
+                        print(f"[{self._timestamp()}] Encoded screen as JPEG "
+                              f"({len(payload['data']) // 1024}KB base64)")
+                if context['screen_image'] is None:
+                    # Vision disabled, or capture/encode failed — fall back to OCR.
+                    print(f"[{self._timestamp()}] Capturing screen (OCR fallback)...")
+                    screen_text = self.screen_capture.capture_and_extract()
+                    if screen_text:
+                        context['screen_text'] = screen_text[:2000]
+                        print(f"[{self._timestamp()}] Captured {len(screen_text)} chars from screen")
 
         except Exception as e:
             print(f"[{self._timestamp()}] Error capturing context: {e}")

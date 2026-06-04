@@ -225,21 +225,36 @@ class InvisibleAIServer:
         question = context.get('question', '')
         history = context.get('history', []) or []
         pinned_context = context.get('pinned_context', '') or ''
+        # Vision: when the client sends an actual screenshot, Claude reads
+        # graphs / equations / diagrams / images directly. screen_text is
+        # only set when vision is disabled or capture/encode failed.
+        screen_image = context.get('screen_image') or None
 
         # Parse display mode from question
         question, display_mode = self._parse_display_mode(question)
 
         # Build AI prompt. Question comes first; screen text is the primary
-        # context. Clipboard is intentionally NOT included by default — it
-        # often contains shell commands or unrelated paste history that
-        # distracts the model from the actual question.
+        # context when there's no image. Clipboard is intentionally NOT
+        # included by default — it often contains shell commands or
+        # unrelated paste history that distracts the model from the actual
+        # question.
         prompt_parts = []
 
         if question:
             prompt_parts.append(f"Question: {question}")
 
-        if screen_text:
-            prompt_parts.append(f"\nWhat's on the user's screen right now (for reference):\n{screen_text[:1500]}")
+        if screen_image:
+            # The image IS the screen reference — let the model know it's
+            # looking at the user's screen and what to focus on.
+            prompt_parts.append(
+                "\nThe attached image is the user's screen. Read it carefully "
+                "(text, equations, graphs, diagrams, layout) and answer the "
+                "question using what you see."
+            )
+        elif screen_text:
+            prompt_parts.append(
+                f"\nWhat's on the user's screen right now (for reference):\n{screen_text[:1500]}"
+            )
 
         if not prompt_parts:
             prompt = "Greet the user briefly and ask what they need."
@@ -297,6 +312,7 @@ class InvisibleAIServer:
                     system=system_prompt,
                     history=history,
                     pinned_context=pinned_context,
+                    image=screen_image,
                 ),
             )
 
