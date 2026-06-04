@@ -17,6 +17,36 @@ _IS_MAC = sys.platform == 'darwin'
 _IS_WIN = sys.platform.startswith('win')
 
 
+# ---------------------------------------------------------------------------
+# Typography + palette — tuned to feel premium in a small overlay panel.
+# Larger body type than the original (Claude-style), generous line spacing,
+# deeper near-black background, off-white text for less harsh contrast.
+# ---------------------------------------------------------------------------
+if _IS_MAC:
+    _UI_FAMILY = "SF Pro Text"
+elif _IS_WIN:
+    _UI_FAMILY = "Segoe UI Variable"
+else:
+    _UI_FAMILY = "Helvetica"
+
+_BODY_FONT     = (_UI_FAMILY, 14)
+_BODY_FONT_BIG = (_UI_FAMILY, 15)
+_TITLE_FONT    = (_UI_FAMILY, 13, "bold")
+_LABEL_FONT    = (_UI_FAMILY, 11)
+_MUTED_FONT    = (_UI_FAMILY, 10)
+_BTN_FONT      = (_UI_FAMILY, 11)
+_BTN_FONT_BOLD = (_UI_FAMILY, 11, "bold")
+
+_BG       = "#161616"   # window background
+_PANEL    = "#1d1d1d"   # title/section background
+_FIELD    = "#222222"   # text widget / input field
+_FIELD_HI = "#272727"   # pinned context field
+_FG       = "#ECECEC"   # body text
+_FG_MUTED = "#9A9AA0"   # subtle labels
+_ACCENT   = "#0a84ff"   # primary action
+_BTN_BG   = "#3a3a3a"   # secondary button
+
+
 def _set_accessory_activation_policy():
     """macOS-only: make the Python process an 'accessory' app — no Dock icon,
     behaves like a menu-bar utility. Accessory apps' windows can appear over
@@ -196,9 +226,9 @@ def _active_screen_top_right(window_w, window_h, margin=20, top_margin=60):
 class ResponseOverlay:
     """Creates a transparent overlay window to display AI responses"""
 
-    MINI_SIZE = (130, 44)
-    COMPACT_SIZE = (380, 320)
-    EXPANDED_SIZE = (720, 560)
+    MINI_SIZE = (140, 46)
+    COMPACT_SIZE = (440, 400)
+    EXPANDED_SIZE = (780, 620)
 
     def __init__(self):
         self.window = None
@@ -223,7 +253,7 @@ class ResponseOverlay:
 
         # Create main window
         self.window = tk.Tk()
-        self.window.title("TextKit")
+        self.window.title("Warden")
 
         # Make the Python app an accessory (improves Spaces behavior) before
         # the NSWindow is fully realized.
@@ -234,45 +264,68 @@ class ResponseOverlay:
         # On Windows/Linux there's no NSWindow level, so use Tk's -topmost
         # to keep the overlay above other windows — without it the overlay
         # falls to normal z-order and gets buried when another app opens.
-        self.window.attributes('-alpha', 0.95)     # Slightly transparent
+        self.window.attributes('-alpha', 0.97)
         if not _IS_MAC:
             self.window.attributes('-topmost', True)
         self.window.resizable(True, True)
-        self.window.minsize(300, 220)
+        # Tall enough that the input row + buttons are always visible (no
+        # "hunting for the writing part by scrolling" — the pen icon also
+        # jumps you straight there).
+        self.window.minsize(380, 380)
 
         # Initial size + position (compact, top-right of active screen)
         self._reposition()
 
         # Style
-        self.window.configure(bg='#1e1e1e')
+        self.window.configure(bg=_BG)
 
         # Title bar with minimize + expand toggles
-        title_frame = tk.Frame(self.window, bg='#2d2d2d', height=40)
+        title_frame = tk.Frame(self.window, bg=_PANEL, height=46)
         title_frame.pack(fill=tk.X, padx=0, pady=0)
 
         title_label = tk.Label(
             title_frame,
-            text="TextKit",
-            bg='#2d2d2d',
-            fg='#ffffff',
-            font=('Arial', 12, 'bold'),
-            pady=10
+            text="Warden",
+            bg=_PANEL,
+            fg=_FG,
+            font=_TITLE_FONT,
+            pady=12,
         )
-        title_label.pack(side=tk.LEFT, padx=12)
+        title_label.pack(side=tk.LEFT, padx=16)
+
+        # "Write ↓" affordance — text label + down arrow so the direction
+        # is unmistakable (the input row lives at the bottom of the panel).
+        # Apple-blue accent so the eye lands on it; click → focus the
+        # input field immediately, restoring from minimized if needed.
+        self.write_btn = tk.Button(
+            title_frame,
+            text="Write ↓",
+            command=self._jump_to_input,
+            bg=_PANEL,
+            fg=_ACCENT,
+            font=(_UI_FAMILY, 12, "bold"),
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            cursor='hand2',
+            activebackground=_FIELD,
+            activeforeground=_ACCENT,
+        )
+        self.write_btn.pack(side=tk.RIGHT, padx=4)
 
         self.expand_btn = tk.Button(
             title_frame,
             text="⤢",
             command=self.toggle_expand,
-            bg='#2d2d2d',
-            fg='#ffffff',
-            font=('Arial', 14, 'bold'),
+            bg=_PANEL,
+            fg=_FG_MUTED,
+            font=(_UI_FAMILY, 14, "bold"),
             relief=tk.FLAT,
             bd=0,
             padx=10,
             cursor='hand2',
-            activebackground='#3d3d3d',
-            activeforeground='#ffffff',
+            activebackground=_FIELD,
+            activeforeground=_FG,
         )
         self.expand_btn.pack(side=tk.RIGHT, padx=4)
 
@@ -280,59 +333,102 @@ class ResponseOverlay:
             title_frame,
             text="—",
             command=self.minimize,
-            bg='#2d2d2d',
-            fg='#ffffff',
-            font=('Arial', 14, 'bold'),
+            bg=_PANEL,
+            fg=_FG_MUTED,
+            font=(_UI_FAMILY, 14, "bold"),
             relief=tk.FLAT,
             bd=0,
             padx=10,
             cursor='hand2',
-            activebackground='#3d3d3d',
-            activeforeground='#ffffff',
+            activebackground=_FIELD,
+            activeforeground=_FG,
         )
         self.minimize_btn.pack(side=tk.RIGHT, padx=4)
 
         # The minimized "pill" view: a single clickable label that lives in
         # place of the rest of the UI when the user clicks minimize.
-        self.mini_frame = tk.Frame(self.window, bg='#1e1e1e')
+        self.mini_frame = tk.Frame(self.window, bg=_BG)
         mini_label = tk.Label(
             self.mini_frame,
-            text="TextKit",
-            bg='#1e1e1e',
-            fg='#ffffff',
-            font=('Arial', 11),
+            text="Warden",
+            bg=_BG,
+            fg=_FG,
+            font=_LABEL_FONT,
             cursor='hand2',
         )
-        mini_label.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+        mini_label.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
         mini_label.bind('<Button-1>', lambda e: self.restore())
         # mini_frame is NOT packed by default — only when minimized.
 
         # Pinned-context box: persistent text included with every request.
         # Stays put until the user edits it. Saved to disk so it survives
         # restarts.
-        pin_frame = tk.Frame(self.window, bg='#1e1e1e')
-        pin_pack = dict(fill=tk.X, padx=10, pady=(10, 0))
+        # === Input row — moved to the TOP of the overlay body so it's
+        # always visible no matter how short the overlay is. Click "Write ↓"
+        # or press Ctrl+Alt+W (cross-platform) → cursor lands here. No
+        # resize, no scrolling, no hunting. ====================================
+        input_frame = tk.Frame(self.window, bg=_BG)
+        input_pack = dict(fill=tk.X, padx=14, pady=(12, 0))
+        input_frame.pack(**input_pack)
+        self.body_frames.append((input_frame, input_pack))
+
+        self.input_entry = tk.Entry(
+            input_frame,
+            bg=_FIELD,
+            fg=_FG,
+            insertbackground=_FG,
+            font=_BODY_FONT,
+            relief=tk.FLAT,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.input_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=9, padx=(0, 8))
+        self.input_entry.bind('<Return>', lambda e: self._submit_question())
+
+        send_btn = tk.Button(
+            input_frame,
+            text="Send",
+            command=self._submit_question,
+            bg=_ACCENT,
+            fg="#ffffff",
+            font=_BTN_FONT_BOLD,
+            relief=tk.FLAT,
+            padx=22,
+            pady=8,
+            cursor='hand2',
+            activebackground="#1c8aff",
+            activeforeground="#ffffff",
+            borderwidth=0,
+        )
+        send_btn.pack(side=tk.RIGHT)
+
+        # Pinned-context box — below the input row, above the response.
+        pin_frame = tk.Frame(self.window, bg=_BG)
+        pin_pack = dict(fill=tk.X, padx=14, pady=(12, 0))
         pin_frame.pack(**pin_pack)
         pin_header = tk.Label(
             pin_frame,
             text="📌  Pinned context (sent every request)",
-            bg='#1e1e1e',
-            fg='#888888',
-            font=('Arial', 9),
+            bg=_BG,
+            fg=_FG_MUTED,
+            font=_MUTED_FONT,
             anchor='w',
         )
-        pin_header.pack(fill=tk.X)
+        pin_header.pack(fill=tk.X, pady=(0, 4))
         self.pin_text = tk.Text(
             pin_frame,
             height=3,
             wrap=tk.WORD,
-            bg='#252525',
-            fg='#cccccc',
-            insertbackground='white',
-            font=('Arial', 10),
+            bg=_FIELD_HI,
+            fg=_FG,
+            insertbackground=_FG,
+            font=_LABEL_FONT,
             relief=tk.FLAT,
-            padx=8,
-            pady=6,
+            padx=10,
+            pady=8,
+            spacing1=1,
+            spacing3=2,
+            highlightthickness=0,
         )
         self.pin_text.pack(fill=tk.X)
         self.pin_text.bind('<KeyRelease>', lambda e: self._schedule_pin_save())
@@ -342,59 +438,34 @@ class ResponseOverlay:
             self.pin_text.insert('1.0', prior)
         self.body_frames.append((pin_frame, pin_pack))
 
-        # Text display area
-        text_frame = tk.Frame(self.window, bg='#1e1e1e')
-        text_pack = dict(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Text display area — the main response panel. Bigger body type,
+        # generous padding, and line spacing for a Claude-style read.
+        text_frame = tk.Frame(self.window, bg=_BG)
+        text_pack = dict(fill=tk.BOTH, expand=True, padx=14, pady=12)
         text_frame.pack(**text_pack)
         self.body_frames.append((text_frame, text_pack))
 
         self.text_widget = scrolledtext.ScrolledText(
             text_frame,
             wrap=tk.WORD,
-            bg='#2d2d2d',
-            fg='#ffffff',
-            font=('Arial', 11),
-            insertbackground='white',
+            bg=_FIELD,
+            fg=_FG,
+            font=_BODY_FONT_BIG,
+            insertbackground=_FG,
             relief=tk.FLAT,
-            padx=10,
-            pady=10
+            padx=16,
+            pady=14,
+            spacing1=2,
+            spacing2=1,
+            spacing3=5,
+            highlightthickness=0,
+            borderwidth=0,
         )
         self.text_widget.pack(fill=tk.BOTH, expand=True)
 
-        # Input row: ask a question directly
-        input_frame = tk.Frame(self.window, bg='#1e1e1e')
-        input_pack = dict(fill=tk.X, padx=10, pady=(0, 10))
-        input_frame.pack(**input_pack)
-        self.body_frames.append((input_frame, input_pack))
-
-        self.input_entry = tk.Entry(
-            input_frame,
-            bg='#2d2d2d',
-            fg='#ffffff',
-            insertbackground='white',
-            font=('Arial', 11),
-            relief=tk.FLAT,
-        )
-        self.input_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=6, padx=(0, 5))
-        self.input_entry.bind('<Return>', lambda e: self._submit_question())
-
-        send_btn = tk.Button(
-            input_frame,
-            text="Send",
-            command=self._submit_question,
-            bg='#0a84ff',
-            fg='#ffffff',
-            font=('Arial', 10, 'bold'),
-            relief=tk.FLAT,
-            padx=18,
-            pady=6,
-            cursor='hand2',
-        )
-        send_btn.pack(side=tk.RIGHT)
-
         # Button frame
-        button_frame = tk.Frame(self.window, bg='#1e1e1e')
-        button_pack = dict(fill=tk.X, padx=10, pady=10)
+        button_frame = tk.Frame(self.window, bg=_BG)
+        button_pack = dict(fill=tk.X, padx=14, pady=(0, 14))
         button_frame.pack(**button_pack)
         self.body_frames.append((button_frame, button_pack))
 
@@ -403,13 +474,16 @@ class ResponseOverlay:
             button_frame,
             text="Minimize (ESC)",
             command=self.minimize,
-            bg='#404040',
-            fg='#ffffff',
-            font=('Arial', 10),
+            bg=_BTN_BG,
+            fg=_FG,
+            font=_BTN_FONT,
             relief=tk.FLAT,
-            padx=20,
-            pady=8,
-            cursor='hand2'
+            padx=22,
+            pady=9,
+            cursor='hand2',
+            activebackground="#4a4a4a",
+            activeforeground=_FG,
+            borderwidth=0,
         )
         close_btn.pack(side=tk.RIGHT)
 
@@ -418,15 +492,18 @@ class ResponseOverlay:
             button_frame,
             text="Copy",
             command=self.copy_to_clipboard,
-            bg='#404040',
-            fg='#ffffff',
-            font=('Arial', 10),
+            bg=_BTN_BG,
+            fg=_FG,
+            font=_BTN_FONT,
             relief=tk.FLAT,
-            padx=20,
-            pady=8,
-            cursor='hand2'
+            padx=22,
+            pady=9,
+            cursor='hand2',
+            activebackground="#4a4a4a",
+            activeforeground=_FG,
+            borderwidth=0,
         )
-        copy_btn.pack(side=tk.RIGHT, padx=5)
+        copy_btn.pack(side=tk.RIGHT, padx=6)
 
         # Keyboard bindings
         self.window.bind('<Escape>', lambda e: self.minimize())
@@ -578,6 +655,27 @@ class ResponseOverlay:
         if self.pin_text is None:
             return ''
         return self.pin_text.get('1.0', 'end-1c').strip()
+
+    def _jump_to_input(self):
+        """"Write ↓" click → focus the input box. That's it.
+
+        Restores from the minimized pill if needed (otherwise focusing
+        a hidden field does nothing visible), scrolls the response to
+        the end so the input is the visual anchor, then puts the
+        cursor straight in the input. No resizing — the user keeps the
+        overlay at whatever size they like.
+        """
+        if self.window is None:
+            return
+        if self.is_minimized:
+            self.restore()
+        if self.text_widget is not None:
+            try:
+                self.text_widget.see('end')
+            except Exception:
+                pass
+        if self.input_entry is not None:
+            self.input_entry.focus_force()
 
     def _submit_question(self):
         """Send whatever's in the input field to the agent's callback."""

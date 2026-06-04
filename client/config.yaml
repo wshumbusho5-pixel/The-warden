@@ -13,7 +13,9 @@ display:
 keyboard:
   # Type-only hotkey: focuses the overlay's input field. No screen capture,
   # no macOS recording indicator. Use this for asking questions directly.
-  hotkey_question: 'ctrl+alt+s'
+  # 'ctrl+alt+s' is frequently grabbed by other apps on macOS; 'ctrl+alt+w'
+  # ("Write") is freer and semantically matches the action.
+  hotkey_question: 'ctrl+alt+w'
 
   # Capture hotkey: captures the screen + auto-asks "what's on my screen?".
   # Triggers macOS's screen-recording indicator (unavoidable). Use sparingly.
