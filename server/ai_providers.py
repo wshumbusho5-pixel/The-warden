@@ -36,11 +36,13 @@ class ClaudeProvider(AIProvider):
     # Up to this many attempts per model before falling back to the next.
     _MAX_ATTEMPTS_PER_MODEL = 4
 
-    def __init__(self, api_key=None, model="claude-sonnet-4-6"):
+    def __init__(self, api_key=None, model=None):
         super().__init__()
         self.name = "Claude (Anthropic)"
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
-        self.model = model
+        # Primary model. Override at deploy time with WARDEN_PRIMARY_MODEL
+        # (e.g. "claude-opus-4-7" for top-tier math/research quality).
+        self.model = model or os.getenv("WARDEN_PRIMARY_MODEL", "claude-sonnet-4-6")
 
         if not self.api_key:
             raise ValueError("ANTHROPIC_API_KEY not found")
