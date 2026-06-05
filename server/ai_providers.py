@@ -45,16 +45,30 @@ class ClaudeProvider(AIProvider):
         if not self.api_key:
             raise ValueError("ANTHROPIC_API_KEY not found")
 
-        # If the primary model is overloaded, fall back to a lighter model that
-        # usually has spare capacity. A Haiku answer beats a 529 error. Override
-        # the chain with WARDEN_FALLBACK_MODELS (comma-separated) if needed.
-        fallback_env = os.getenv("WARDEN_FALLBACK_MODELS", "claude-haiku-4-5-20251001")
+        # Fallback chain on transient overload. Default escalates UP to Opus
+        # 4.7 first (better answer than Haiku when Sonnet is busy), then
+        # finally down to Haiku as a last resort to avoid handing the user
+        # a 529. Override with WARDEN_FALLBACK_MODELS (comma-separated).
+        fallback_env = os.getenv(
+            "WARDEN_FALLBACK_MODELS",
+            "claude-opus-4-7,claude-haiku-4-5-20251001",
+        )
         self.fallback_models = [m.strip() for m in fallback_env.split(",") if m.strip()]
+
+        # Extended thinking budget. When > 0, Sonnet/Opus get a private
+        # reasoning scratchpad before answering — major accuracy bump on
+        # math, physics, code, multi-step problems. Costs more output
+        # tokens (thinking counts as output), but the budget is a cap, not
+        # a target; typical use is much lower. Set 0 to disable.
+        try:
+            self.thinking_budget = int(os.getenv("WARDEN_THINKING_BUDGET", "4000"))
+        except ValueError:
+            self.thinking_budget = 0
 
         # Bump default timeout (default ~60s can be too short on slow links).
         # We do our own retry/backoff + model fallback below, so disable the
         # SDK's internal retries to keep timing predictable.
-        self.client = Anthropic(api_key=self.api_key, timeout=120.0, max_retries=0)
+        self.client = Anthropic(api_key=self.api_key, timeout=180.0, max_retries=0)
 
     def is_available(self):
         """Check if Claude is available"""
@@ -136,6 +150,16 @@ class ClaudeProvider(AIProvider):
             if system_blocks:
                 kwargs["system"] = system_blocks
 
+            # Extended thinking — only supported on Sonnet 4+ / Opus 4+.
+            # Haiku 4.5 doesn't take a thinking budget, so we skip it there.
+            # max_tokens must exceed the thinking budget, so bump it.
+            if self.thinking_budget > 0 and ("sonnet-4" in model or "opus-4" in model):
+                kwargs["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": self.thinking_budget,
+                }
+                kwargs["max_tokens"] = max(max_tokens, self.thinking_budget + 2000)
+
             for attempt in range(self._MAX_ATTEMPTS_PER_MODEL):
                 try:
                     message = self.client.messages.create(**kwargs)
@@ -149,9 +173,27 @@ class ClaudeProvider(AIProvider):
                     if model != self.model:
                         print(f"[claude] primary overloaded — served by fallback model {model}")
 
+                    # When thinking is enabled the first block is a private
+                    # 'thinking' block — pull the visible answer out of the
+                    # text blocks only.
+                    texts = [
+                        b.text for b in message.content
+                        if getattr(b, "type", None) == "text"
+                    ]
+                    content_text = "\n\n".join(texts) if texts else ""
+                    if not content_text:
+                        # Defensive fallback — shouldn't happen on a normal
+                        # response, but never return an empty answer.
+                        first = message.content[0] if message.content else None
+                        content_text = (
+                            getattr(first, "text", "")
+                            or getattr(first, "thinking", "")
+                            or ""
+                        )
+
                     return {
                         'success': True,
-                        'content': message.content[0].text,
+                        'content': content_text,
                         'model': model,
                         'provider': 'claude',
                         'tokens_used': tokens_used,
