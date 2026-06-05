@@ -150,15 +150,23 @@ class ClaudeProvider(AIProvider):
             if system_blocks:
                 kwargs["system"] = system_blocks
 
-            # Extended thinking — only supported on Sonnet 4+ / Opus 4+.
-            # Haiku 4.5 doesn't take a thinking budget, so we skip it there.
-            # max_tokens must exceed the thinking budget, so bump it.
-            if self.thinking_budget > 0 and ("sonnet-4" in model or "opus-4" in model):
-                kwargs["thinking"] = {
-                    "type": "enabled",
-                    "budget_tokens": self.thinking_budget,
-                }
-                kwargs["max_tokens"] = max(max_tokens, self.thinking_budget + 2000)
+            # Extended thinking. The two Claude model families take different
+            # shapes for it — passing the wrong one returns HTTP 400:
+            #   Sonnet 4.x  -> thinking={"type":"enabled","budget_tokens":N}
+            #                  and max_tokens must exceed the budget.
+            #   Opus 4.x    -> thinking={"type":"adaptive"} +
+            #                  output_config={"effort": "high"}
+            #   Haiku 4.5   -> no thinking parameter (unsupported).
+            if self.thinking_budget > 0:
+                if "sonnet-4" in model:
+                    kwargs["thinking"] = {
+                        "type": "enabled",
+                        "budget_tokens": self.thinking_budget,
+                    }
+                    kwargs["max_tokens"] = max(max_tokens, self.thinking_budget + 2000)
+                elif "opus-4" in model:
+                    kwargs["thinking"] = {"type": "adaptive"}
+                    kwargs["output_config"] = {"effort": "high"}
 
             for attempt in range(self._MAX_ATTEMPTS_PER_MODEL):
                 try:
