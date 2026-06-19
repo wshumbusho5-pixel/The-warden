@@ -1,271 +1,166 @@
-# Invisible AI Assistant
+# Warden
 
-A personal distributed computing system that enables seamless interaction with AI across multiple devices.
+A desktop assistant that reads what is on your screen and answers questions
+about it. The overlay window is excluded from screen-capture APIs on
+macOS and Windows, so it does not appear in screen recordings,
+screenshots, or screen-shares on calls.
 
-**Press F1 anywhere to summon your AI assistant!**
+It runs on macOS and Windows. The client is a small overlay; the AI work
+happens on a hosted server that holds the Anthropic API key, meters
+usage, and bills through Stripe.
 
-## ✨ Features
+## What it does
 
-- 🔥 **Invisible Operation** - Press F1 anywhere, AI responds instantly
-- 🎥 **Smart Display Routing** - Show on client/server/both/silent (perfect for video calls!)
-- 👁️ **Screen Awareness** - Sees what's on your screen via OCR
-- 📋 **Clipboard Integration** - Automatically includes clipboard context
-- 💻 **Distributed Computing** - Lightweight client, powerful server
-- 🔒 **Privacy-First** - All processing on your local network
-- 🎨 **Transparent Overlay** - Responses appear over your work
-- ⚡ **Real-time** - WebSocket communication for instant responses
+Press a hotkey, the client captures the current screen, sends the image
+to Claude, and shows the response in the overlay. Two hotkeys:
 
-## 🚀 Quick Start
+- `Ctrl + Alt + A` — capture the screen and ask Claude about it.
+- `Ctrl + Alt + W` — open the overlay's input box and type a question.
 
-**📖 For detailed setup instructions, see [SETUP.md](SETUP.md)**
+On macOS the modifier shows as `Option` instead of `Alt`.
 
-### 1. Setup Environment
+The overlay sits at the top-right of whichever display the cursor is on,
+stays above other windows, and is invisible to screen capture
+(`NSWindowSharingNone` on macOS, `WDA_EXCLUDEFROMCAPTURE` on Windows).
+A Zoom audience, a screen-recorder, and a PrintScreen all see whatever
+is behind it. The user sees it on the physical display.
 
-```bash
-cd invisible-ai-assistant
+## Architecture
 
-# Create .env file from example
-cp .env.example .env
+```
+client/                 desktop overlay (Tk)
+  main.py               agent loop, websocket client
+  screen_capture.py     PIL ImageGrab + native OCR fallback
+                        (Vision on macOS, Windows.Media.Ocr on Windows)
+  keyboard_listener.py  Carbon hotkeys on macOS, Win32 RegisterHotKey
+                        on Windows
+  overlay_display.py    Tk window with invisibility flags + always-on-top
+  invite.py             encodes / decodes the first-run invite code
+                        (base64 of {server_url, token})
 
-# Edit .env and add your Claude API key
-# ANTHROPIC_API_KEY=your-key-here
+server/                 WebSocket gateway + billing
+  main_server.py        websockets server, auth, request handling
+  ai_providers.py       Anthropic client with retry, model fallback,
+                        vision, extended thinking
+  token_store.py        SQLite token store, monthly usage metering,
+                        Stripe subscription state
+  billing_server.py     Flask app: /join landing, Stripe Checkout,
+                        webhook -> mint / revoke / pause
+  admin.py              CLI for minting and revoking tokens
 ```
 
-### 2. Get Your Claude API Key
+The client captures the screen, base64-encodes a JPEG, and sends it to
+the server over an authenticated WSS connection. The server passes the
+image to Claude as an image content block. Claude responds with text,
+which the client renders in the overlay.
 
-1. Go to https://console.anthropic.com/
-2. Create an account or sign in
-3. Navigate to API Keys
-4. Create a new key and copy it
-5. Paste it in your `.env` file
+OCR is kept as a fallback for the case where image capture or vision is
+unavailable. Set `WARDEN_VISION_DISABLED=1` on the client to force the
+OCR path.
 
-### 3. Install Tesseract OCR (Required for Screen Capture)
+## Subscribing and installing
+
+The intended path for a paying user:
+
+1. Subscribe at `https://warden.areliga.com/join`. After Stripe Checkout
+   completes, the success page shows an invite code that starts with
+   `warden:`. Copy it.
+2. Download the build for your OS from the latest release:
+   `https://github.com/wshumbusho5-pixel/The-warden/releases/latest`.
+   On macOS use `TextKit-macOS.zip`; on Windows use
+   `TextKit-Windows.zip`.
+3. Unzip the download and open the app. The app is unsigned, so the OS
+   will warn the first time:
+   - macOS: right-click the app, choose Open, confirm.
+   - Windows: SmartScreen → More info → Run anyway.
+4. Paste the invite code into the first-run dialog. The app saves it and
+   does not ask again.
+5. Press `Ctrl + Alt + A` (`Ctrl + Option + A` on macOS) on any screen
+   to ask Claude about it.
+
+The release bundles are produced by GitHub Actions from this repository.
+The repository is public; no secrets are bundled.
+
+## Running from source
+
+Useful for development or to point at a different server.
+
+Requirements: Python 3.11. On macOS, PyObjC's Cocoa, Vision, and Quartz
+modules. On Windows, the `winrt` package for `Windows.Media.Ocr`.
 
 ```bash
-# macOS
-brew install tesseract
-
-# Ubuntu/Debian
-sudo apt-get install tesseract-ocr
-```
-
-### 4. Start the Server (Main Computer)
-
-```bash
-./start_server.sh
-```
-
-### 5. Start the Client (User Computer)
-
-**Full Featured Mode (Background + Hotkey):**
-```bash
-./start_invisible.sh
-```
-
-Now press **F1** anywhere to activate!
-
-**Or Interactive Mode (for testing):**
-```bash
+python3.11 -m venv venv
 source venv/bin/activate
-python client/invisible_agent.py --mode interactive
+pip install -r requirements.txt
+# macOS extras
+pip install pyobjc-framework-Cocoa pyobjc-framework-Vision pyobjc-framework-Quartz
 ```
 
-**Or Basic Mode (no screen capture):**
-```bash
-./start_client.sh
-```
-
-## 📁 Project Structure
-
-```
-invisible-ai-assistant/
-├── client/                      # User computer agent
-│   ├── agent.py                # Basic client (MVP)
-│   ├── invisible_agent.py      # Full featured client
-│   ├── screen_capture.py       # Screen capture + OCR
-│   ├── keyboard_listener.py    # Hotkey detection
-│   └── overlay_display.py      # Transparent overlay UI
-├── server/                      # Main computer brain
-│   ├── main_server.py          # WebSocket server + AI
-│   └── config.yaml             # Server configuration
-├── start_server.sh             # Quick start server
-├── start_client.sh             # Quick start basic client
-├── start_invisible.sh          # Quick start full client
-├── SETUP.md                    # Detailed setup guide
-├── README.md                   # This file
-└── .env                        # Your API keys (you create this)
-```
-
-## 🔧 Configuration
-
-### Server Configuration
-Edit `server/config.yaml` to change:
-- Port number
-- AI model
-- Max tokens
-- Logging level
-
-### Client Configuration
-Edit `.env` to set:
-- `MAIN_COMPUTER_IP` - IP address of your main computer
-- `SERVER_PORT` - Port number (default: 8765)
-
-## 🎯 Current Features
-
-### ✅ Fully Working
-- **WebSocket Communication** - Real-time client-server connection
-- **Claude AI Integration** - Powered by Claude Sonnet 4.5
-- **Screen Capture + OCR** - Reads text from your screen
-- **Keyboard Shortcuts** - Global hotkey (F1) activation
-- **Smart Display Routing** - 4 modes: client/server/both/silent
-- **Server Display Window** - Shows responses on main computer
-- **Transparent Overlay** - Beautiful response display on client
-- **Clipboard Integration** - Automatic context from clipboard
-- **Background Mode** - Runs invisibly, always ready
-- **Interactive Mode** - Terminal-based testing mode
-- **Multi-Client Support** - Multiple devices connect to one server
-- **Error Handling** - Graceful error recovery
-
-### 🚧 Coming Next (Phase 3+)
-
-- Auto-start on boot (system service)
-- Advanced context filtering (exclude sensitive data)
-- Multi-modal input (voice, image analysis)
-- Custom commands and workflows
-- Response caching for speed
-- Analytics dashboard
-- Security encryption (TLS/SSL)
-- API cost tracking
-
-## 🐛 Troubleshooting
-
-### "Connection refused"
-- Make sure the server is running
-- Check the IP address is correct
-- Check firewall settings
-
-### "ANTHROPIC_API_KEY not found"
-- Make sure you created `.env` file
-- Make sure you added your API key
-- Make sure there are no spaces around the `=` sign
-
-### "Module not found"
-- Make sure you activated the virtual environment: `source venv/bin/activate`
-- Try reinstalling: `pip install -r requirements.txt`
-
-## 💡 Usage Examples
-
-### Background Mode (Invisible)
-```bash
-# Start server
-./start_server.sh
-
-# Start client in another terminal
-./start_invisible.sh
-
-# Now anywhere in your system:
-# 1. Open a text document
-# 2. Press F1
-# 3. AI reads your screen and helps!
-```
-
-### 🎥 Video Call Mode (NEW!)
-
-**Perfect for Zoom, Teams, Google Meet:**
+Run the client pointed at a server:
 
 ```bash
-# You're in a video call, sharing your screen
-# Need AI help but don't want audience to see it
-
-1. Copy: /server How do I explain this technical concept?
-2. Press F1
-3. YOUR SCREEN: Stays completely clean ✅
-4. SERVER DISPLAY: Shows AI response ✅
-5. AUDIENCE: Sees nothing! 🎉
+cd client
+WARDEN_SERVER_URL=wss://warden.areliga.com \
+WARDEN_AUTH_TOKEN=<token> \
+python main.py
 ```
 
-**See [DISPLAY_MODES.md](DISPLAY_MODES.md) for complete guide**
+Run the server locally (Anthropic key required):
 
-### Real-World Professional Scenarios
-
-**Scenario 1: Sales Presentation**
-1. You're presenting to a client, screen shared
-2. Client asks unexpected technical question
-3. Copy: `/server Quick answer for [their question]`
-4. Press F1
-5. Read answer from server display (second monitor)
-6. Client sees nothing, you look prepared!
-
-**Scenario 2: Code Review Meeting**
-1. Reviewing code on screen share
-2. Teammate asks about a pattern you're unsure of
-3. Copy: `/server Explain [pattern name]`
-4. Press F1
-5. Get instant explanation on server, share it verbally
-
-**Scenario 3: Live Coding Session**
-1. Teaching/demonstrating code live
-2. Hit an error you don't recognize
-3. Copy error message + `/server`
-4. Press F1
-5. Solution appears on your other monitor
-6. Audience thinks you're a genius!
-
-**Scenario 4: Regular Work**
-1. Just coding normally
-2. Press F1 (no modifier)
-3. Overlay appears on YOUR screen
-4. Quick help without switching apps
-
-### Display Mode Quick Reference
-
-| Copy This | Your Screen | Server Display | Use Case |
-|-----------|-------------|----------------|----------|
-| *(nothing)* | ✅ Shows | ❌ Nothing | Normal work |
-| `/server question` | ❌ **Nothing** | ✅ Shows | Video calls, presentations |
-| `/both question` | ✅ Shows | ✅ Shows | Multi-monitor setup |
-| `/silent question` | ❌ Nothing | ❌ Nothing | Max privacy, logs only |
-
-### Interactive Mode
 ```bash
-./start_invisible.sh --mode interactive
-
-You: What's on my screen?
-(AI analyzes screen and responds)
-
-You: /server Explain this code
-(Response shows ONLY on server)
+cd server
+ANTHROPIC_API_KEY=<key> python main_server.py
 ```
 
-## 📝 License
+## Configuration
 
-Personal use project - See project plan for details
+Configuration is mostly through environment variables. The client also
+reads `client/config.yaml` for the hotkey assignments.
 
-## 🤝 Contributing
+### Client
 
-This is currently a personal project. See the full project plan PDF for roadmap and future enhancements.
+- `WARDEN_SERVER_URL` — WSS URL of the server. Set automatically by the
+  invite code on first run, but can be overridden.
+- `WARDEN_AUTH_TOKEN` — bearer token. Set automatically by the invite
+  code on first run.
+- `WARDEN_VISION_DISABLED=1` — disable vision; send OCR text only.
+- `WARDEN_NO_DISPLAY=1` — headless mode; used by CI smoke tests.
 
----
+### Server
 
-**Version:** 0.3.0 (Professional Edition)
-**Status:** Production Ready
-**Last Updated:** 2025-12-22
+- `ANTHROPIC_API_KEY` — required.
+- `WARDEN_AUTH_TOKEN` — master token. Always accepted, never metered.
+- `WARDEN_PRIMARY_MODEL` — primary model. Default
+  `claude-sonnet-4-6`; `claude-opus-4-7` is also supported.
+- `WARDEN_FALLBACK_MODELS` — comma-separated chain used when the
+  primary returns a transient overload. Default
+  `claude-opus-4-7,claude-haiku-4-5-20251001`.
+- `WARDEN_THINKING_BUDGET` — extended thinking budget. Default 4000.
+  Set to 0 to disable.
+- `WARDEN_SUB_USAGE_LIMIT` — per-subscriber monthly request cap.
+  Default 3500.
+- `WARDEN_DB_PATH` — path to the SQLite token store. Defaults to
+  `server/warden.db` next to the server.
+- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_ID` —
+  Stripe configuration for the billing service.
+- `WARDEN_PUBLIC_URL` — public URL used for Stripe redirect targets.
+- `WARDEN_WSS_URL` — WSS URL baked into invite codes minted by the
+  server.
 
-## 🎯 What's New in v0.3.0
+## Build and release
 
-- 🎥 **Smart Display Routing** - 4 modes for privacy control
-- 🖥️ **Server Display Window** - See responses on main computer
-- 🔒 **Video Call Privacy** - `/server` mode keeps screen clean
-- 📊 **Display Modifiers** - `/server`, `/both`, `/silent`, `/client`
-- ✨ All features from v0.2.0 (Screen OCR, Hotkeys, Overlay, etc.)
+CI builds the desktop bundles on tag push.
 
-## 🎯 What's New in v0.2.0
+```bash
+git tag v0.1.x
+git push origin v0.1.x
+```
 
-- ✨ Screen capture with OCR
-- ⌨️ Global keyboard shortcuts (F1)
-- 🎨 Transparent overlay display
-- 🔄 Background service mode
-- 📊 Enhanced context capture
-- 🚀 Production-ready features
+The workflow runs a Windows OCR smoke test, builds both `.app` and
+`.exe` bundles with PyInstaller, and attaches `TextKit-macOS.zip` and
+`TextKit-Windows.zip` to the GitHub release.
 
-See [SETUP.md](SETUP.md) for setup and [DISPLAY_MODES.md](DISPLAY_MODES.md) for display routing.
+## License
+
+Personal project, source-available. Commercial reuse is not licensed
+without permission.
