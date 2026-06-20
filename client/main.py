@@ -417,11 +417,33 @@ class InvisibleAgentPro:
 
                 return response_data
 
+        except websockets.exceptions.ConnectionClosed as e:
+            # Server actively closed the connection. 4401 is our auth-rejection
+            # code — surface the close reason so the user sees something
+            # meaningful (e.g. "Access paused: subscription canceled.")
+            # instead of a generic "couldn't connect" message.
+            print(f"[{self._timestamp()}] Server closed connection: code={e.code} reason={e.reason!r}")
+            reason = (e.reason or '').strip()
+            if e.code == 4401:
+                content = f'Access paused: {reason}.' if reason else 'Access denied.'
+            else:
+                content = (
+                    f'Server closed the connection (code {e.code}).'
+                    + (f' {reason}' if reason else '')
+                    + '\nTry again in a moment.'
+                )
+            return {
+                'type': 'error',
+                'content': content,
+                'timestamp': self._timestamp(),
+            }
         except websockets.exceptions.WebSocketException as e:
+            # Couldn't reach the server at all (network down, TLS failed,
+            # handshake rejected before close-frame, etc).
             print(f"[{self._timestamp()}] Connection error: {e}")
             return {
                 'type': 'error',
-                'content': f'Could not connect to server at {self.server_url}\nMake sure the server is running.',
+                'content': f'Could not reach server at {self.server_url}.\nCheck your internet connection.',
                 'timestamp': self._timestamp()
             }
         except Exception as e:
