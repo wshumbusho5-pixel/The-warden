@@ -3,6 +3,10 @@ websockets>=12.0
 anthropic>=0.39.0
 openai>=1.54.0
 requests>=2.31.0
+# certifi ships a trusted CA bundle. We use it explicitly for wss://
+# connections so the bundled Mac/Windows app verifies TLS without depending
+# on SSL_CERT_FILE in the OS environment.
+certifi>=2024.0.0
 
 # Client-side dependencies
 pynput>=1.7.6

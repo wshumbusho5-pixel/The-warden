@@ -5,6 +5,7 @@ Full featured agent with screen capture, OCR, keyboard shortcuts, and overlay di
 """
 
 import asyncio
+import ssl
 import websockets
 import json
 import pyperclip
@@ -13,6 +14,28 @@ import os
 import sys
 import yaml
 from dotenv import load_dotenv
+
+# CA bundle path. certifi ships a trusted root cert set; using it directly
+# means the PyInstaller-bundled Mac/Windows app doesn't depend on the OS
+# environment setting SSL_CERT_FILE — which it doesn't on a fresh macOS,
+# producing CERTIFICATE_VERIFY_FAILED on every wss:// connect.
+try:
+    import certifi
+    _CA_BUNDLE = certifi.where()
+except Exception:
+    _CA_BUNDLE = None
+
+
+def _build_ssl_context():
+    """SSL context for wss:// using certifi when available, system roots
+    otherwise. Best-effort — never blocks the connect path."""
+    try:
+        if _CA_BUNDLE:
+            return ssl.create_default_context(cafile=_CA_BUNDLE)
+        return ssl.create_default_context()
+    except Exception as e:
+        print(f"[ssl] context build failed: {e}; falling back to default")
+        return None
 
 # Import our modules
 from screen_capture import ScreenCapture
@@ -369,6 +392,14 @@ class InvisibleAgentPro:
                 connect_kwargs['additional_headers'] = {
                     'Authorization': f'Bearer {self.auth_token}',
                 }
+            # For wss://, pass an explicit SSL context backed by certifi
+                # so verification works regardless of the OS env. Without
+                # this the bundled Mac app hits CERTIFICATE_VERIFY_FAILED
+                # on a fresh login session.
+            if self.server_url.startswith('wss://'):
+                ctx = _build_ssl_context()
+                if ctx is not None:
+                    connect_kwargs['ssl'] = ctx
 
             async with websockets.connect(self.server_url, **connect_kwargs) as websocket:
                 print(f"[{self._timestamp()}] Connected!")
