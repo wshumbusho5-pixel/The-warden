@@ -41,6 +41,7 @@ def _build_ssl_context():
 from screen_capture import ScreenCapture
 from keyboard_listener import KeyboardListener
 from overlay_display import ResponseOverlay
+from history_store import HistoryStore
 
 
 def _load_keyboard_config():
@@ -286,6 +287,18 @@ class InvisibleAgentPro:
         )
         self.overlay = ResponseOverlay()
 
+        # Local Q&A log on the user's machine. The model never sees it —
+        # it's there so the user can scroll back / search past answers
+        # without re-querying (zero added API cost).
+        try:
+            self.history_store = HistoryStore()
+            print(f"[{self._timestamp()}] History store: {self.history_store.path} "
+                  f"({self.history_store.count()} entries)")
+        except Exception as e:
+            print(f"[{self._timestamp()}] History store unavailable: {e}")
+            self.history_store = None
+        self.overlay.history_store = self.history_store
+
         # State
         self.running = False
         self.request_count = 0
@@ -445,6 +458,18 @@ class InvisibleAgentPro:
                     # Trim to most recent N entries
                     if len(self.history) > self.HISTORY_LIMIT:
                         self.history = self.history[-self.HISTORY_LIMIT:]
+                    # Append to the local Q&A log (best-effort; never block
+                    # the response path on a logging failure).
+                    if self.history_store is not None:
+                        try:
+                            model = (response_data.get('metadata') or {}).get('model', '')
+                            self.history_store.add(
+                                question=question or '',
+                                answer=answer or '',
+                                model=model,
+                            )
+                        except Exception as e:
+                            print(f"[{self._timestamp()}] history write failed: {e}")
 
                 return response_data
 

@@ -237,10 +237,14 @@ class ResponseOverlay:
         self.pin_text = None  # Text widget for the persistent pinned context
         self.expand_btn = None
         self.minimize_btn = None
+        self.history_btn = None
         # Each entry: (frame, pack_kwargs_dict). Hidden when minimized.
         self.body_frames = []
         self.mini_frame = None
         self.on_submit = None  # callback: fn(question_str) — set by agent
+        self.history_store = None  # set by agent — local Q&A log for the
+                                   # History popup (None = button is inert)
+        self._history_window = None  # the open Toplevel, if any
         self.is_visible = True
         self.is_expanded = False
         self.is_minimized = False
@@ -312,6 +316,24 @@ class ResponseOverlay:
             activeforeground=_ACCENT,
         )
         self.write_btn.pack(side=tk.RIGHT, padx=4)
+
+        # History — opens a small popup listing past Q&A (local SQLite log).
+        # Click an entry to render it in the response area. Search-as-you-type.
+        self.history_btn = tk.Button(
+            title_frame,
+            text="History",
+            command=self._open_history_window,
+            bg=_PANEL,
+            fg=_FG_MUTED,
+            font=(_UI_FAMILY, 11),
+            relief=tk.FLAT,
+            bd=0,
+            padx=10,
+            cursor='hand2',
+            activebackground=_FIELD,
+            activeforeground=_FG,
+        )
+        self.history_btn.pack(side=tk.RIGHT, padx=4)
 
         self.expand_btn = tk.Button(
             title_frame,
@@ -655,6 +677,149 @@ class ResponseOverlay:
         if self.pin_text is None:
             return ''
         return self.pin_text.get('1.0', 'end-1c').strip()
+
+    def _open_history_window(self):
+        """Pop a small searchable list of past Q&A. Click an entry to
+        render it in the main response area. Cheap and local — never
+        re-queries the model."""
+        if self.window is None or self.history_store is None:
+            return
+
+        # If one is already open, just bring it forward.
+        if self._history_window is not None:
+            try:
+                if self._history_window.winfo_exists():
+                    self._history_window.deiconify()
+                    self._history_window.lift()
+                    self._history_window.focus_force()
+                    return
+            except Exception:
+                pass
+            self._history_window = None
+
+        win = tk.Toplevel(self.window)
+        self._history_window = win
+        win.title("Warden — History")
+        win.configure(bg=_BG)
+        win.geometry("560x540")
+        if not _IS_MAC:
+            try:
+                win.attributes('-topmost', True)
+            except Exception:
+                pass
+
+        # Header / search row
+        header = tk.Frame(win, bg=_BG)
+        header.pack(fill=tk.X, padx=14, pady=(14, 8))
+        tk.Label(
+            header,
+            text="Search",
+            bg=_BG,
+            fg=_FG_MUTED,
+            font=_MUTED_FONT,
+        ).pack(side=tk.LEFT)
+        search_var = tk.StringVar()
+        search_entry = tk.Entry(
+            header,
+            textvariable=search_var,
+            bg=_FIELD,
+            fg=_FG,
+            insertbackground=_FG,
+            font=_BODY_FONT,
+            relief=tk.FLAT,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0), ipady=6)
+        search_entry.focus_set()
+
+        count_label = tk.Label(
+            win,
+            text="",
+            bg=_BG,
+            fg=_FG_MUTED,
+            font=_MUTED_FONT,
+            anchor='w',
+        )
+        count_label.pack(fill=tk.X, padx=14, pady=(0, 6))
+
+        # List + scrollbar
+        list_frame = tk.Frame(win, bg=_BG)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 14))
+        listbox = tk.Listbox(
+            list_frame,
+            bg=_FIELD,
+            fg=_FG,
+            font=_BODY_FONT,
+            selectmode=tk.SINGLE,
+            relief=tk.FLAT,
+            highlightthickness=0,
+            borderwidth=0,
+            activestyle='none',
+            selectbackground=_ACCENT,
+            selectforeground='#ffffff',
+        )
+        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb = tk.Scrollbar(list_frame, command=listbox.yview)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        listbox.config(yscrollcommand=sb.set)
+
+        # Holds the entries currently displayed, indexed to listbox rows.
+        state = {'entries': []}
+
+        def refresh(*_):
+            q = search_var.get().strip()
+            entries = (
+                self.history_store.search(q, limit=200)
+                if q else self.history_store.recent(limit=200)
+            )
+            state['entries'] = entries
+            listbox.delete(0, tk.END)
+            for e in entries:
+                listbox.insert(tk.END, e.short_label())
+            total = self.history_store.count()
+            if q:
+                count_label.configure(
+                    text=f"{len(entries)} match(es) of {total} total."
+                )
+            else:
+                count_label.configure(text=f"{total} total entries.")
+
+        def on_select(_event=None):
+            sel = listbox.curselection()
+            if not sel:
+                return
+            entry = state['entries'][sel[0]]
+            from datetime import datetime as _dt
+            when = _dt.fromtimestamp(entry.ts).strftime("%Y-%m-%d %H:%M")
+            content = (
+                f"[{when}]"
+                + (f"\n\nQ: {entry.question}" if entry.question else "")
+                + f"\n\n{entry.answer}"
+            )
+            if self.text_widget is not None:
+                self.text_widget.delete(1.0, tk.END)
+                self.text_widget.insert(1.0, content)
+                self.text_widget.see('1.0')
+            self.window.lift()
+            if not _IS_MAC:
+                try:
+                    self.window.attributes('-topmost', True)
+                except Exception:
+                    pass
+
+        def on_close():
+            self._history_window = None
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        listbox.bind('<<ListboxSelect>>', on_select)
+        search_var.trace_add('write', refresh)
+        win.protocol('WM_DELETE_WINDOW', on_close)
+        win.bind('<Escape>', lambda _e: on_close())
+        refresh()
 
     def _jump_to_input(self):
         """"Write ↓" click → focus the input box. That's it.
