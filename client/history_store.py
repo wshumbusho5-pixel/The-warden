@@ -15,6 +15,14 @@ import time
 from datetime import datetime
 
 
+# Canned questions that get re-used for every invocation of a given hotkey.
+# When the stored question matches one of these, the list label falls back
+# to the answer's first line so capture entries aren't all visually identical.
+_CANNED_QUESTIONS = {
+    "help me with what's on my screen",
+}
+
+
 def default_db_path():
     """Cross-platform per-user location for the history DB."""
     if sys.platform == "darwin":
@@ -42,13 +50,29 @@ class HistoryEntry:
         self.answer = answer or ""
         self.model = model or ""
 
-    def short_label(self, max_chars=64):
-        """One-line label for list views: 'Jun 23 10:23 — first words…'"""
-        q = (self.question or self.answer or "").strip().replace("\n", " ")
-        if len(q) > max_chars:
-            q = q[: max_chars - 1] + "…"
+    def short_label(self, max_chars=72):
+        """One-line label for the list view.
+
+        Hotkey-captured entries all carry the canned question 'Help me
+        with what's on my screen' — using that as the label would make
+        every capture row look identical. For canned/empty questions,
+        surface the first line of the answer instead, prefixed with
+        'Screen:' so capture entries are distinguishable from typed
+        questions at a glance.
+        """
+        q = (self.question or "").strip()
+        a = (self.answer or "").strip()
         when = datetime.fromtimestamp(self.ts).strftime("%b %d %H:%M")
-        return f"{when}  —  {q}" if q else when
+
+        if (not q) or q.lower() in _CANNED_QUESTIONS:
+            first_line = next((ln for ln in a.splitlines() if ln.strip()), "")
+            text = f"Screen: {first_line}" if first_line else "Screen: (no response)"
+        else:
+            text = q.replace("\n", " ").strip()
+
+        if len(text) > max_chars:
+            text = text[: max_chars - 1] + "…"
+        return f"{when}  —  {text}"
 
 
 class HistoryStore:
