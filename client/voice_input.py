@@ -145,20 +145,31 @@ class VoiceInput:
         import numpy as np
 
         self._recording = False
+        frame_count = len(self._frames)
         if self._stream is not None:
             try:
                 self._stream.stop()
                 self._stream.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[voice] stream teardown warning: {e}")
             self._stream = None
 
+        # If no audio callbacks fired at all, that's the tell for macOS
+        # microphone permission being denied — PortAudio opens the stream
+        # successfully but the OS returns no data.
         if not self._frames:
+            print(f"[voice] stop pressed — 0 audio frames captured. "
+                  f"This means the mic stream fired no callbacks, which on macOS "
+                  f"almost always means microphone permission is denied for TextKit. "
+                  f"Grant it in System Settings > Privacy & Security > Microphone, "
+                  f"then fully quit and reopen TextKit.")
             self._emit("idle")
             return
 
         audio = np.concatenate(self._frames, axis=0).flatten().astype("float32")
         self._frames = []
+        print(f"[voice] stop pressed — captured {frame_count} audio chunk(s), "
+              f"{len(audio)} samples ({len(audio)/_SAMPLE_RATE:.1f}s)")
 
         # Whisper is happy with < 0.5s of audio but it's usually noise; skip.
         if len(audio) < _SAMPLE_RATE // 2:
