@@ -187,6 +187,18 @@ class VoiceInput:
             return self._model
 
     def _transcribe_worker(self, audio):
+        import numpy as np
+        # Log audio stats up front — silent recording (zero energy) is the
+        # single most common failure mode when mic permission isn't granted,
+        # and without this log we can't tell it apart from Whisper trouble.
+        duration = len(audio) / _SAMPLE_RATE
+        rms = float(np.sqrt(np.mean(audio.astype("float64") ** 2))) if len(audio) else 0.0
+        peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+        print(f"[voice] transcribing {duration:.1f}s  rms={rms:.4f}  peak={peak:.4f}")
+        if rms < 1e-4:
+            print("[voice] audio energy is effectively zero — mic likely muted "
+                  "or macOS microphone permission not granted for TextKit.")
+
         try:
             model = self._get_model()
             segments, _info = model.transcribe(
@@ -195,14 +207,20 @@ class VoiceInput:
                 vad_filter=True,
                 beam_size=5,
             )
+            # transcribe() returns a generator — exhaust it so we can count.
+            segments = list(segments)
             text = " ".join(s.text for s in segments).strip()
+            print(f"[voice] result: {len(segments)} segment(s), text={text!r}")
         except Exception as e:
             print(f"[voice] transcription failed: {e}")
             self._emit("idle")
             return
 
         self._emit("idle")
-        if text and self.on_transcript_ready is not None:
+        if not text:
+            print("[voice] empty transcript — nothing sent")
+            return
+        if self.on_transcript_ready is not None:
             try:
                 self.on_transcript_ready(text)
             except Exception as e:
