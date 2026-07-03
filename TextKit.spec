@@ -27,6 +27,12 @@ _WHISPER_DIR = os.path.join(PROJECT_ROOT, 'whisper_models')
 if os.path.isdir(_WHISPER_DIR):
     datas.append((_WHISPER_DIR, 'whisper_models'))
 
+# faster-whisper ships a Silero VAD ONNX model in its assets/ directory
+# that vad_filter=True loads at runtime. PyInstaller misses package data
+# files unless we ask for them explicitly, so grab them here.
+from PyInstaller.utils.hooks import collect_data_files
+datas += collect_data_files('faster_whisper')
+
 # Common hidden imports the static analyzer can miss
 hiddenimports = ['PIL', 'PIL._tkinter_finder']
 
