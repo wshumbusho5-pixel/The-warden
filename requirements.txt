@@ -8,6 +8,13 @@ requests>=2.31.0
 # on SSL_CERT_FILE in the OS environment.
 certifi>=2024.0.0
 
+# Voice input — Whisper on-device transcription.
+# faster-whisper wraps CTranslate2 for fast CPU inference; sounddevice
+# captures mic audio via PortAudio (cross-platform).
+faster-whisper>=1.0.0
+sounddevice>=0.4.6
+numpy>=1.24.0
+
 # Client-side dependencies
 pynput>=1.7.6
 pyautogui>=0.9.54

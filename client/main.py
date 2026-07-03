@@ -45,7 +45,8 @@ from history_store import HistoryStore
 
 
 def _load_keyboard_config():
-    """Returns (hotkey_question, hotkey_capture) tuple. Falls back to defaults."""
+    """Returns (hotkey_question, hotkey_capture, hotkey_voice) tuple.
+    Falls back to sensible defaults if the config file can't be read."""
     candidates = [os.path.join(os.path.dirname(__file__), 'config.yaml')]
     if hasattr(sys, '_MEIPASS'):
         candidates.append(os.path.join(sys._MEIPASS, 'client', 'config.yaml'))
@@ -55,12 +56,13 @@ def _load_keyboard_config():
                 cfg = yaml.safe_load(f) or {}
             kb = cfg.get('keyboard', {}) or {}
             return (
-                kb.get('hotkey_question', 'left+s'),
-                kb.get('hotkey_capture', kb.get('hotkey', 'left+a')),
+                kb.get('hotkey_question', 'ctrl+alt+w'),
+                kb.get('hotkey_capture', kb.get('hotkey', 'ctrl+alt+a')),
+                kb.get('hotkey_voice', 'ctrl+alt+v'),
             )
         except Exception:
             continue
-    return ('left+s', 'left+a')
+    return ('ctrl+alt+w', 'ctrl+alt+a', 'ctrl+alt+v')
 
 
 def _load_hotkey(default='ctrl+alt+a'):
@@ -276,16 +278,35 @@ class InvisibleAgentPro:
 
         # Initialize components
         self.screen_capture = ScreenCapture()
-        self.hotkey_question, self.hotkey_capture = _load_keyboard_config()
+        self.hotkey_question, self.hotkey_capture, self.hotkey_voice = _load_keyboard_config()
         self.hotkey = self.hotkey_capture  # legacy single-hotkey display
+
+        # Voice input (local Whisper transcription). Constructed here so the
+        # keyboard listener can bind the voice hotkey; if the model or
+        # audio deps aren't available, VoiceInput sets enabled=False and
+        # the tap becomes a no-op.
+        from voice_input import VoiceInput
+        self.voice_input = VoiceInput(
+            on_transcript_ready=self._on_voice_transcript,
+        )
+
+        listener_bindings = {
+            self.hotkey_question: self.on_focus_input,
+            self.hotkey_capture: self.on_hotkey_activated,
+        }
+        if self.voice_input.enabled:
+            listener_bindings[self.hotkey_voice] = self.on_voice_toggle
+
         self.keyboard_listener = KeyboardListener(
-            bindings={
-                self.hotkey_question: self.on_focus_input,
-                self.hotkey_capture: self.on_hotkey_activated,
-            },
-            hotkey=self.hotkey_capture
+            bindings=listener_bindings,
+            hotkey=self.hotkey_capture,
         )
         self.overlay = ResponseOverlay()
+
+        # Wire the voice state indicator to the overlay so the user sees
+        # "Recording…" / "Transcribing…" while a voice invocation is
+        # in-flight.
+        self.voice_input.on_state_change = self._on_voice_state_change
 
         # Local Q&A log on the user's machine. The model never sees it —
         # it's there so the user can scroll back / search past answers
@@ -568,6 +589,47 @@ class InvisibleAgentPro:
             args=(question, True),
             daemon=True,
         ).start()
+
+    def on_voice_toggle(self):
+        """Voice hotkey tap: start recording, or stop + transcribe if
+        already recording."""
+        if self.voice_input is None or not self.voice_input.enabled:
+            return
+        # Run on a worker thread so mic open / stream teardown never blocks
+        # the Carbon / Win32 hotkey callback thread.
+        import threading
+        threading.Thread(
+            target=self.voice_input.toggle,
+            daemon=True,
+        ).start()
+
+    def _on_voice_transcript(self, text):
+        """Whisper finished — fire a normal capture+question request with
+        the transcript as the user's question."""
+        text = (text or "").strip()
+        if not text:
+            print(f"[{self._timestamp()}] Voice: empty transcript, nothing to send")
+            return
+        print(f"[{self._timestamp()}] Voice: {text!r}")
+        self._run_request(text, use_screen=True)
+
+    def _on_voice_state_change(self, state):
+        """State changes from VoiceInput. Show a small status label in the
+        overlay so the user knows the mic / whisper is doing something.
+        Uses window.after so we don't touch Tk off the main thread."""
+        if self.overlay is None or self.overlay.window is None:
+            return
+        label = {
+            "recording": "Recording…",
+            "transcribing": "Transcribing…",
+            "idle": "",
+        }.get(state, "")
+        try:
+            self.overlay.window.after(
+                0, lambda: self.overlay.set_status(label)
+            )
+        except Exception:
+            pass
 
     def _run_request(self, question, use_screen):
         try:

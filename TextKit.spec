@@ -19,6 +19,14 @@ datas = [
     (os.path.join(PROJECT_ROOT, 'client', 'config.yaml'), 'client'),
 ]
 
+# Whisper model for local voice transcription. Downloaded in CI before this
+# spec runs (see .github/workflows/build.yml) and shipped inside the bundle.
+# Absence is not fatal — voice_input.py degrades gracefully — but the intent
+# is for every release to include the model.
+_WHISPER_DIR = os.path.join(PROJECT_ROOT, 'whisper_models')
+if os.path.isdir(_WHISPER_DIR):
+    datas.append((_WHISPER_DIR, 'whisper_models'))
+
 # Common hidden imports the static analyzer can miss
 hiddenimports = ['PIL', 'PIL._tkinter_finder']
 
@@ -104,5 +112,6 @@ if IS_MAC:
             'LSUIElement': True,  # accessory app — no Dock icon
             'NSHighResolutionCapable': True,
             'NSAppleEventsUsageDescription': 'TextKit needs accessibility access for the global hotkey.',
+            'NSMicrophoneUsageDescription': 'Warden transcribes your voice locally on this device with Whisper. Audio is never sent to any server.',
         },
     )

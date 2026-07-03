@@ -21,6 +21,11 @@ keyboard:
   # Triggers macOS's screen-recording indicator (unavoidable). Use sparingly.
   hotkey_capture: 'ctrl+alt+a'
 
+  # Voice hotkey: push-to-toggle voice input. First tap starts recording;
+  # second tap stops, transcribes locally with Whisper, and fires a
+  # normal question request with the transcript + a screen capture.
+  hotkey_voice: 'ctrl+alt+v'
+
   # Legacy single-hotkey field (still read for back-compat).
   hotkey: 'ctrl+alt+a'
 

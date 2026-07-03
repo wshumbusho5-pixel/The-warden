@@ -238,6 +238,7 @@ class ResponseOverlay:
         self.expand_btn = None
         self.minimize_btn = None
         self.history_btn = None
+        self.status_label = None  # brief text next to the brand (voice states)
         # Each entry: (frame, pack_kwargs_dict). Hidden when minimized.
         self.body_frames = []
         self.mini_frame = None
@@ -286,6 +287,18 @@ class ResponseOverlay:
         # Title bar with minimize + expand toggles
         title_frame = tk.Frame(self.window, bg=_PANEL, height=46)
         title_frame.pack(fill=tk.X, padx=0, pady=0)
+
+        # Voice / async status ("Recording…", "Transcribing…"). Sits right
+        # next to the brand so it's the first thing the user notices. Empty
+        # string when nothing's happening.
+        self.status_label = tk.Label(
+            title_frame,
+            text="",
+            bg=_PANEL,
+            fg=_ACCENT,
+            font=(_UI_FAMILY, 11, "bold"),
+        )
+        self.status_label.pack(side=tk.RIGHT, padx=(0, 8))
 
         title_label = tk.Label(
             title_frame,
@@ -677,6 +690,16 @@ class ResponseOverlay:
         if self.pin_text is None:
             return ''
         return self.pin_text.get('1.0', 'end-1c').strip()
+
+    def set_status(self, text):
+        """Show a short status label next to the brand ('Recording…',
+        'Transcribing…'). Empty string clears it."""
+        if self.status_label is None:
+            return
+        try:
+            self.status_label.configure(text=text or "")
+        except Exception:
+            pass
 
     def _open_history_window(self):
         """Pop a small searchable list of past Q&A. Click an entry to

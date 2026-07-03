@@ -63,3 +63,4 @@ htmlcov/
 *.backup
 temp/
 tmp/
+whisper_models/
