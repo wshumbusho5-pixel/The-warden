@@ -237,16 +237,16 @@ class ScreenCapture:
             return self.extract_text_from_image(screenshot)
         return ""
 
-    def capture_and_encode(self, region=None, max_long_side=1568, quality=80):
+    def capture_and_encode(self, region=None, max_long_side=1024, quality=80):
         """Capture the screen and return a JPEG payload ready to send to
         Anthropic's vision API.
 
         Args:
             region: Optional (x, y, w, h) crop.
-            max_long_side: Longest-edge cap in pixels. 1568 matches Anthropic's
-                recommended max for cost-effective vision input — anything
-                larger is downsized server-side anyway, so do it locally to
-                cut bandwidth.
+            max_long_side: Longest-edge cap in pixels. 1024 keeps screen
+                text readable while cutting vision-token cost ~40% vs
+                1568. Anthropic bills roughly 1 token per 750 pixels, so
+                a 1024x600 image is ~800 tokens vs ~2000 for 1568x900.
             quality: JPEG quality 0-100. 80 keeps text crisply readable on a
                 typical screen while keeping the payload under ~150KB.
 

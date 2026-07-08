@@ -580,13 +580,21 @@ class InvisibleAgentPro:
             self.overlay.window.after(0, _do)
 
     def on_user_question(self, question):
-        """Called when the user types a question into the overlay input."""
+        """Called when the user types a question into the overlay input.
+
+        Typed questions do NOT include a screen capture by default — that
+        was ~2000 wasted vision tokens per call when the question was a
+        pure text/reasoning task. The user can opt into vision by
+        prefixing the question with '/screen ' (which we strip here).
+        For screen-focused work the capture hotkey (Ctrl+Alt+A) is the
+        explicit affordance.
+        """
         print(f"[{self._timestamp()}] User question: {question}")
-        # Run on a worker thread so Tk mainloop stays responsive
+        q, use_screen = self._strip_screen_prefix(question)
         import threading
         threading.Thread(
             target=self._run_request,
-            args=(question, True),
+            args=(q, use_screen),
             daemon=True,
         ).start()
 
@@ -604,14 +612,49 @@ class InvisibleAgentPro:
         ).start()
 
     def _on_voice_transcript(self, text):
-        """Whisper finished — fire a normal capture+question request with
-        the transcript as the user's question."""
+        """Whisper finished — fire a request with the transcript.
+
+        Voice questions do NOT attach a screen capture by default —
+        most voice usage is conversational. Users can start their
+        sentence with 'screen' or 'look at my screen' to opt in
+        explicitly (handled by _strip_screen_prefix)."""
         text = (text or "").strip()
         if not text:
             print(f"[{self._timestamp()}] Voice: empty transcript, nothing to send")
             return
         print(f"[{self._timestamp()}] Voice: {text!r}")
-        self._run_request(text, use_screen=True)
+        q, use_screen = self._strip_screen_prefix(text)
+        self._run_request(q, use_screen)
+
+    def _strip_screen_prefix(self, question):
+        """Detect an opt-in-to-screen request and strip its prefix.
+
+        Returns (question_without_prefix, use_screen: bool).
+
+        Recognized prefixes (case-insensitive, leading whitespace ok):
+          '/screen ...'      — explicit slash-command form
+          'screen: ...'
+          'look at my screen ...'
+          'look at the screen ...'
+          'on my screen ...'
+        Any leading punctuation after stripping is also cleaned up so
+        the model sees a clean sentence.
+        """
+        import re
+        q = (question or "").strip()
+        low = q.lower()
+        patterns = (
+            (r"^/screen\b\s*", True),
+            (r"^screen:\s*",   True),
+            (r"^look at (my|the) screen\b[,\s]*", True),
+            (r"^on my screen[,\s]*", True),
+        )
+        for pat, use_scr in patterns:
+            m = re.match(pat, low)
+            if m:
+                stripped = q[m.end():].lstrip(" ,.:;-")
+                return (stripped, use_scr)
+        return (q, False)
 
     def _on_voice_state_change(self, state):
         """State changes from VoiceInput. Show a small status label in the

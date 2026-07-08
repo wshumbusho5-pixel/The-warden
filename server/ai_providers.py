@@ -159,7 +159,19 @@ class ClaudeProvider(AIProvider):
             #   Opus 4.x    -> thinking={"type":"adaptive"} +
             #                  output_config={"effort": "high"}
             #   Haiku 4.5   -> no thinking parameter (unsupported).
-            if self.thinking_budget > 0:
+            #
+            # Gate: only enable thinking when there's an image attached
+            # (screen-capture path). Text/voice questions are usually
+            # conversational and thinking wastes 500-2000 output tokens
+            # per call for negligible quality gain. Screen questions
+            # (math, diagrams, code) genuinely benefit — keep it on
+            # there. Set WARDEN_THINKING_ALWAYS=1 to force it on for
+            # every call regardless.
+            think_always = os.getenv("WARDEN_THINKING_ALWAYS", "").strip().lower() in (
+                "1", "true", "yes", "on"
+            )
+            should_think = self.thinking_budget > 0 and (bool(image) or think_always)
+            if should_think:
                 if "sonnet-4" in model:
                     kwargs["thinking"] = {
                         "type": "enabled",
