@@ -1,0 +1,155 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Warden</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body {
+    margin: 0; padding: 0;
+    background: #222222;
+    color: #ECECEC;
+    font: 15px/1.6 -apple-system, "SF Pro Text", "Segoe UI Variable",
+                    "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  #content {
+    padding: 14px 18px;
+    word-wrap: break-word;
+  }
+  #content p:first-child { margin-top: 0; }
+  #content > *:last-child { margin-bottom: 0; }
+
+  h1, h2, h3, h4 { font-weight: 600; line-height: 1.3; }
+  h1 { font-size: 20px; margin: 22px 0 10px; }
+  h2 { font-size: 17px; margin: 20px 0 8px; }
+  h3 { font-size: 15px; margin: 18px 0 6px; color: #cfcfcf; }
+  p  { margin: 10px 0; }
+  ul, ol { margin: 10px 0; padding-left: 24px; }
+  li { margin: 4px 0; }
+  strong { color: #ffffff; }
+  em { color: #d6d6d6; }
+  blockquote {
+    border-left: 3px solid #4a4a4a;
+    margin: 12px 0; padding: 4px 12px;
+    color: #b8b8b8;
+  }
+  a { color: #5aa9ff; }
+
+  /* Inline + block code */
+  code {
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13px;
+  }
+  :not(pre) > code {
+    background: #2d2d2d;
+    padding: 1px 6px;
+    border-radius: 4px;
+    color: #f0c674;
+  }
+  pre {
+    background: #1a1a1a;
+    padding: 12px 14px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 12px 0;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+
+  /* MathJax containers */
+  mjx-container { color: #ECECEC; }
+  mjx-container[jax="SVG"][display="true"] { margin: 12px 0; }
+
+  hr { border: 0; border-top: 1px solid #333; margin: 18px 0; }
+
+  /* Streaming caret */
+  #caret {
+    display: inline-block;
+    width: 8px; height: 15px;
+    background: #5aa9ff;
+    vertical-align: text-bottom;
+    animation: blink 1s steps(2) infinite;
+    margin-left: 2px;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .idle #caret { display: none; }
+</style>
+<link rel="stylesheet" href="vendor/prism-tomorrow.css">
+<script>
+  // MathJax config — inline math via $...$, display math via $$...$$
+  window.MathJax = {
+    tex: {
+      inlineMath: [['$', '$'], ['\\(', '\\)']],
+      displayMath: [['$$', '$$'], ['\\[', '\\]']],
+      processEscapes: true,
+    },
+    svg: { fontCache: 'global' },
+    startup: {
+      typeset: false,  // we call typeset manually after each render
+    },
+  };
+</script>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/prism.js"></script>
+<script src="vendor/prism-python.js"></script>
+<script src="vendor/prism-js.js"></script>
+<script src="vendor/prism-bash.js"></script>
+<script src="vendor/prism-json.js"></script>
+<script src="vendor/mathjax-tex-svg.js"></script>
+<script>
+  // Configure marked once at load — GFM tables + line breaks in lists.
+  marked.setOptions({
+    gfm: true,
+    breaks: false,
+  });
+
+  // Called from the Python side by evaluating JS in the webview.
+  // `markdown` is the model's answer as a Markdown string.
+  window.renderMarkdown = function(markdown) {
+    const container = document.getElementById('content');
+    const html = marked.parse(markdown || '');
+    container.innerHTML = html;
+    document.body.classList.add('idle');
+
+    // Syntax-highlight code blocks.
+    if (window.Prism) {
+      Prism.highlightAllUnder(container);
+    }
+
+    // Render math. MathJax is async; guard against calls before it loads.
+    if (window.MathJax && window.MathJax.typesetPromise) {
+      window.MathJax.typesetPromise([container]).catch(function(err) {
+        console.error('MathJax typeset error:', err);
+      });
+    }
+
+    // Auto-scroll to bottom on new content (natural for a chat-style reply).
+    window.scrollTo(0, document.body.scrollHeight);
+  };
+
+  // Called at request start to show "thinking" state.
+  window.setThinking = function(question) {
+    const container = document.getElementById('content');
+    const safe = (question || '').replace(/</g, '&lt;');
+    container.innerHTML =
+      '<p style="color:#9a9a9a;">Asking: <em>' + safe + '</em></p>' +
+      '<p style="color:#9a9a9a;">(thinking<span id="caret"></span>)</p>';
+    document.body.classList.remove('idle');
+  };
+
+  // Initial content when nothing has been asked yet.
+  window.addEventListener('DOMContentLoaded', function() {
+    if (!document.getElementById('content').innerHTML.trim()) {
+      document.getElementById('content').innerHTML =
+        '<p style="color:#9a9a9a;">Ready. Type a question below or press ' +
+        'the hotkey to ask about your screen.</p>';
+    }
+  });
+</script>
+</head>
+<body class="idle">
+<div id="content"></div>
+</body>
+</html>

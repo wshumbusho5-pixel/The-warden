@@ -233,6 +233,8 @@ class ResponseOverlay:
     def __init__(self):
         self.window = None
         self.text_widget = None
+        self.webview_panel = None  # WKWebView when available, else None
+        self._last_content = ''    # last rendered body (for Copy on webview)
         self.input_entry = None
         self.pin_text = None  # Text widget for the persistent pinned context
         self.expand_btn = None
@@ -473,30 +475,50 @@ class ResponseOverlay:
             self.pin_text.insert('1.0', prior)
         self.body_frames.append((pin_frame, pin_pack))
 
-        # Text display area — the main response panel. Bigger body type,
-        # generous padding, and line spacing for a Claude-style read.
+        # Text display area — the main response panel.
+        #
+        # On macOS we embed a native WKWebView (rendered Markdown +
+        # MathJax + syntax-highlighted code, matches what ChatGPT /
+        # Claude show). The WKWebView inherits the parent window's
+        # NSWindowSharingNone flag, so invisibility to screen capture
+        # still holds. On Windows / Linux, and if the WebKit binding
+        # isn't available, we fall back to the Tk text widget.
         text_frame = tk.Frame(self.window, bg=_BG)
         text_pack = dict(fill=tk.BOTH, expand=True, padx=14, pady=12)
         text_frame.pack(**text_pack)
         self.body_frames.append((text_frame, text_pack))
 
-        self.text_widget = scrolledtext.ScrolledText(
-            text_frame,
-            wrap=tk.WORD,
-            bg=_FIELD,
-            fg=_FG,
-            font=_BODY_FONT_BIG,
-            insertbackground=_FG,
-            relief=tk.FLAT,
-            padx=16,
-            pady=14,
-            spacing1=2,
-            spacing2=1,
-            spacing3=5,
-            highlightthickness=0,
-            borderwidth=0,
-        )
-        self.text_widget.pack(fill=tk.BOTH, expand=True)
+        self.webview_panel = None
+        if _IS_MAC:
+            try:
+                # Force full layout so the Tk frame has its final screen
+                # geometry before we dock a webview child window over it.
+                self.window.update()
+                from webview_panel import WebviewPanel
+                self.webview_panel = WebviewPanel(text_frame, self.window)
+                print("[overlay] response panel: WKWebView (Markdown + math)")
+            except Exception as e:
+                self.webview_panel = None
+                print(f"[overlay] webview unavailable ({e}); using Tk text widget")
+
+        if self.webview_panel is None:
+            self.text_widget = scrolledtext.ScrolledText(
+                text_frame,
+                wrap=tk.WORD,
+                bg=_FIELD,
+                fg=_FG,
+                font=_BODY_FONT_BIG,
+                insertbackground=_FG,
+                relief=tk.FLAT,
+                padx=16,
+                pady=14,
+                spacing1=2,
+                spacing2=1,
+                spacing3=5,
+                highlightthickness=0,
+                borderwidth=0,
+            )
+            self.text_widget.pack(fill=tk.BOTH, expand=True)
 
         # Button frame
         button_frame = tk.Frame(self.window, bg=_BG)
@@ -566,14 +588,31 @@ class ResponseOverlay:
         if self.is_minimized:
             self.restore()
 
-        self.text_widget.delete(1.0, tk.END)
-        self.text_widget.insert(1.0, content)
+        # Remember the raw text so Copy can grab it verbatim even when the
+        # rendered view lives inside a webview (where a Tk text-widget
+        # selection isn't available).
+        self._last_content = content or ''
 
-        if metadata:
-            self.text_widget.insert(tk.END, f"\n\n{'─'*50}\n")
-            self.text_widget.insert(tk.END, f"Model: {metadata.get('model', 'unknown')}\n")
-            self.text_widget.insert(tk.END, f"Tokens: {metadata.get('tokens_used', 'unknown')}\n")
-            self.text_widget.insert(tk.END, f"Time: {metadata.get('timestamp', 'unknown')}\n")
+        if self.webview_panel is not None:
+            # Webview backend — render Markdown, math, code.
+            body = content or ''
+            if metadata:
+                body += (
+                    f"\n\n---\n"
+                    f"*Model:* {metadata.get('model', 'unknown')}  \n"
+                    f"*Tokens:* {metadata.get('tokens_used', 'unknown')}  \n"
+                    f"*Time:* {metadata.get('timestamp', 'unknown')}\n"
+                )
+            self.webview_panel.render_markdown(body)
+        else:
+            self.text_widget.delete(1.0, tk.END)
+            self.text_widget.insert(1.0, content)
+
+            if metadata:
+                self.text_widget.insert(tk.END, f"\n\n{'─'*50}\n")
+                self.text_widget.insert(tk.END, f"Model: {metadata.get('model', 'unknown')}\n")
+                self.text_widget.insert(tk.END, f"Tokens: {metadata.get('tokens_used', 'unknown')}\n")
+                self.text_widget.insert(tk.END, f"Time: {metadata.get('timestamp', 'unknown')}\n")
 
         # Bring it to front of the z-order without stealing focus.
         # NSWindow attributes (sharing, collection, level) were set at
@@ -820,7 +859,10 @@ class ResponseOverlay:
                 + (f"\n\nQ: {entry.question}" if entry.question else "")
                 + f"\n\n{entry.answer}"
             )
-            if self.text_widget is not None:
+            self._last_content = content
+            if self.webview_panel is not None:
+                self.webview_panel.render_markdown(content)
+            elif self.text_widget is not None:
                 self.text_widget.delete(1.0, tk.END)
                 self.text_widget.insert(1.0, content)
                 self.text_widget.see('1.0')
@@ -874,23 +916,49 @@ class ResponseOverlay:
             return
         self.input_entry.delete(0, tk.END)
         # Indicate that a request is in flight
-        self.text_widget.delete(1.0, tk.END)
-        self.text_widget.insert(1.0, f"Asking: {question}\n\n(thinking...)")
+        self._last_content = f"Asking: {question}\n\n(thinking...)"
+        if self.webview_panel is not None:
+            self.webview_panel.set_thinking(question)
+        elif self.text_widget is not None:
+            self.text_widget.delete(1.0, tk.END)
+            self.text_widget.insert(1.0, f"Asking: {question}\n\n(thinking...)")
         try:
             self.on_submit(question)
         except Exception as e:
             print(f"[ERROR] on_submit callback failed: {e}")
 
     def copy_to_clipboard(self):
-        """Copy content to clipboard"""
-        if self.text_widget:
-            content = self.text_widget.get(1.0, tk.END)
+        """Copy the last rendered answer to the clipboard.
+
+        Webview backend can't do a live Tk selection get, so we copy the
+        raw Markdown source we rendered — which is what the user
+        actually wants anyway (paste into notes / another app).
+        """
+        content = ''
+        if self.webview_panel is not None:
+            content = self._last_content or ''
+        elif self.text_widget is not None:
+            try:
+                content = self.text_widget.get(1.0, tk.END)
+            except Exception:
+                content = self._last_content or ''
+        if not content:
+            return
+        try:
             self.window.clipboard_clear()
             self.window.clipboard_append(content)
             print("[INFO] Content copied to clipboard")
+        except Exception as e:
+            print(f"[WARN] clipboard write failed: {e}")
 
     def destroy(self):
         """Destroy the window"""
+        if self.webview_panel is not None:
+            try:
+                self.webview_panel.destroy()
+            except Exception:
+                pass
+            self.webview_panel = None
         if self.window:
             try:
                 self.window.destroy()

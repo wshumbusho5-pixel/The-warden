@@ -47,7 +47,7 @@ jobs:
           pip install -r requirements.txt
           # Mac-only OCR + window APIs. Kept out of requirements.txt so
           # non-Mac installs don't try to resolve pyobjc wheels.
-          pip install pyobjc-framework-Cocoa pyobjc-framework-Vision pyobjc-framework-Quartz
+          pip install pyobjc-framework-Cocoa pyobjc-framework-Vision pyobjc-framework-Quartz pyobjc-framework-WebKit
           pip install pyinstaller huggingface-hub
 
       - name: Pre-download Whisper model

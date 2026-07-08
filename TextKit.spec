@@ -17,6 +17,11 @@ IS_WIN = sys.platform.startswith('win')
 datas = [
     (os.path.join(PROJECT_ROOT, 'server'), 'server'),
     (os.path.join(PROJECT_ROOT, 'client', 'config.yaml'), 'client'),
+    # Webview shell + vendored JS/CSS (Markdown, MathJax, Prism). Loaded
+    # locally by WKWebView on macOS, so the app renders without any
+    # network calls at answer-time.
+    (os.path.join(PROJECT_ROOT, 'client', 'webview_assets'),
+     os.path.join('client', 'webview_assets')),
 ]
 
 # Whisper model for local voice transcription. Downloaded in CI before this
@@ -41,6 +46,8 @@ if IS_MAC:
         'pynput.keyboard._darwin',
         'pynput.mouse._darwin',
         'Cocoa', 'Quartz', 'AppKit', 'objc',
+        # WKWebView-backed response panel (webview_panel.py).
+        'WebKit',
     ]
 elif IS_WIN:
     hiddenimports += [
