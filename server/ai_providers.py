@@ -112,6 +112,28 @@ class ClaudeProvider(AIProvider):
         side surfaces as a slightly slower answer instead of an error.
         """
         messages = list(history) if history else []
+        # Cache the prior-history prefix. Marking the last prior message's
+        # final content block with cache_control means every next turn re-uses
+        # the whole growing history at ~10% of input cost instead of paying
+        # full price for it every call. Only the new current turn is billed
+        # at full rate.
+        if messages:
+            last_prior = dict(messages[-1])
+            content = last_prior["content"]
+            if isinstance(content, str):
+                new_content = [{
+                    "type": "text",
+                    "text": content,
+                    "cache_control": {"type": "ephemeral"},
+                }]
+            else:
+                new_content = list(content)
+                marked = dict(new_content[-1])
+                marked["cache_control"] = {"type": "ephemeral"}
+                new_content[-1] = marked
+            last_prior["content"] = new_content
+            messages[-1] = last_prior
+
         if image:
             messages.append({
                 "role": "user",

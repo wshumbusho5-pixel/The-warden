@@ -325,7 +325,7 @@ class InvisibleAgentPro:
         self.request_count = 0
         # Last N exchanges for multi-turn memory: [{role, content}, ...]
         self.history = []
-        self.HISTORY_LIMIT = 5  # last 5 messages — 2-3 exchanges, lean and cheap
+        self.HISTORY_LIMIT = 100  # TEMP for interview: ~50 Q&A pairs. Revert to 5 after.
         # Auto-flush history if no activity for this many seconds — prevents
         # yesterday's chemistry context bleeding into today's psych session.
         self.HISTORY_IDLE_FLUSH_SECONDS = 30 * 60
